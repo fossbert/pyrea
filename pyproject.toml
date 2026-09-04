@@ -28,6 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+r = ["rpy2>=3.5"]          # aREA / Viper / Gsea1T / Gsea2T (needs Bioconductor package: viper)
 test = ["pytest>=7"]
 
 [project.urls]

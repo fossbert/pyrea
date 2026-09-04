@@ -1,5 +1,3 @@
-import pandas as pd
-
 import pyrea as pr
 
 
@@ -22,22 +20,15 @@ def test_import_exposes_public_api():
         assert hasattr(pr, name)
 
 
+def test_rbackend_submodule_imports_without_r():
+    # importing pyrea and pyrea.rbackend must not require rpy2/R
+    import pyrea.rbackend as rb
+
+    assert hasattr(rb, "require_rpy2")
+    assert hasattr(rb, "r_package")
+
+
 def test_load_genesets_bundled_hallmark():
     genesets = pr.load_genesets("h", "human")
     assert isinstance(genesets, dict)
     assert len(genesets) > 0
-
-
-def test_area_smoke(rng):
-    genes = [f"gene{i}" for i in range(60)]
-    genesets = {
-        "set_a": genes[:25],
-        "set_b": genes[20:45],
-    }
-    regulon = pr.gene_sets_to_regulon(genesets, minsize=20)
-
-    dset = pd.Series(rng.normal(size=len(genes)), index=genes)
-    nes = pr.aREA(dset, regulon)
-
-    assert isinstance(nes, pd.DataFrame)
-    assert set(nes.index) == {"set_a", "set_b"}

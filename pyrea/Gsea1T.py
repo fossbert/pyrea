@@ -11,7 +11,7 @@ from matplotlib.cm import coolwarm, ScalarMappable
 import matplotlib.colors as mcolors
 
 # gene set enrichment and helpers
-from .aREA import aREA
+from .rbackend.area import aREA
 from .utils import gene_sets_to_regulon, _prep_ges
 from . import plotting as pl
 from scipy.stats import norm
