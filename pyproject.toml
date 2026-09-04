@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrea"
+version = "0.1.0"
+description = "Tools for gene set enrichment functionality (GSEA, VIPER, aREA)"
+authors = [{ name = "H. Carlo Maurer", email = "h.carlo.maurer@gmail.com" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["gsea", "gene-set-enrichment", "viper", "area", "regulon", "bioinformatics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.20.3",
+    "pandas>=1.3.1",
+    "scipy>=1.6.2",
+    "statsmodels>=0.12.2",
+    "matplotlib>=3.4.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/fossbert/pyrea"
+Issues = "https://github.com/fossbert/pyrea/issues"
+
+[tool.setuptools.packages.find]
+include = ["pyrea*"]
+
+[tool.setuptools.package-data]
+pyrea = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
