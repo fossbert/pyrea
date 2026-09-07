@@ -1215,7 +1215,7 @@ class GseaMultReg:
         -------
 
         """
-        targets = regulons.groupby('source').apply(self._split_targets)
+        targets = regulons.groupby('source', observed=True).apply(self._split_targets)
         
         target_df = pd.DataFrame(zip(*targets), 
                                columns=targets.index, 

@@ -59,7 +59,7 @@ def aREA(dset, regulon, minsize=20, dset_filter=False):
         eset_r = ro.conversion.py2rpy(frame)
 
     reg_entries = {}
-    for source, grp in regulon.groupby("source"):
+    for source, grp in regulon.groupby("source", observed=True):
         tfmode = ro.FloatVector(grp["mor"].to_numpy(dtype=float))
         tfmode.names = ro.StrVector(grp["target"].astype(str))
         likelihood = ro.FloatVector(grp["likelihood"].to_numpy(dtype=float))
