@@ -152,3 +152,13 @@ def test_association_ignores_not_profiled(data):
     m.loc["GENE_A", wt_cols[:20]] = np.nan
     res = pr.mutation_association(m, {"G": G}, min_mut=10)
     assert res.loc["GENE_A", "n_mut"] == 20 and res.loc["GENE_A", "nes_G"] < -3
+
+
+def test_mps_key_maps_rows_to_genes(data):
+    mut, G, R = data
+    fus = mut.loc[["GENE_A"]].rename(index={"GENE_A": "A-B fusion"})
+    res = pr.mutant_phenotype_score(fus, G, R, key={"A-B fusion": "GENE_A"})
+    ref = pr.mutant_phenotype_score(mut.loc[["GENE_A"]], G, R)
+    assert list(res.index) == ["A-B fusion"]
+    np.testing.assert_allclose(res.iloc[0], ref.iloc[0])
+    assert pr.mutant_phenotype_score(fus, G, R).empty        # unmapped row is no gene

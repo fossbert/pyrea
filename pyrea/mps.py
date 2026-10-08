@@ -111,8 +111,9 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
                            activity: pd.DataFrame,
                            rpt: Optional[pd.DataFrame] = None,
                            min_mut: int = 10,
-                           min_wt: int = 10) -> pd.DataFrame:
-    """Mutant phenotype score for each gene in ``mutations``.
+                           min_wt: int = 10,
+                           key: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
+    """Mutant phenotype score for each row of ``mutations``.
 
     Parameters
     ----------
@@ -131,6 +132,11 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
         below the thresholds, or absent from ``activity``/``rpt``, are
         omitted. (The paper only states "at least two samples"; the KDE is
         shaky that low, hence the stricter default.)
+    key : mapping row id -> gene, optional
+        Rows of ``mutations`` that are not gene names (e.g. a gene fusion
+        'CLDN18-ARHGAP6/26') are scored on the activity of the mapped gene.
+        Rows not in the mapping are used as they are. The result is indexed
+        by the row ids of ``mutations``.
 
     Returns
     -------
@@ -142,14 +148,15 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
     traits = [activity] if rpt is None else [activity, rpt]
     samples = _common_samples(mutations, *traits)
     rows = {}
-    for gene in mutations.index:
+    for rid in mutations.index:
+        gene = rid if key is None else key.get(rid, rid)
         if gene not in activity.index:
             continue
-        row = mutations.loc[gene, samples].to_numpy(dtype=float)
+        row = mutations.loc[rid, samples].to_numpy(dtype=float)
         m, wt = row == 1, row == 0  # NaN = not profiled: neither mutant nor WT
         if m.sum() < min_mut or wt.sum() < min_wt:
             continue
-        rows[gene] = _gene_rl(gene, m, wt, traits, samples)
+        rows[rid] = _gene_rl(gene, m, wt, traits, samples)
     return pd.DataFrame.from_dict(rows, orient="index", columns=samples)
 
 
