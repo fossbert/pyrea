@@ -123,3 +123,27 @@ Things to know:
   `min_mps` carriers (default 10).
 - The pan-cancer integration over tumour types (paper Fig. 6b) is not implemented.
 
+### Do two alterations act alike? (phenocopy)
+
+`compare_phenotypes` compares alteration groups on the activity of one protein, e.g. whether a
+gene fusion mimics a mutation of the target gene:
+
+```python
+groups = {"RHOA mut": mut.loc["RHOA"], "ARHGAP fusion": fus.loc["CLDN-ARHGAP"]}   # 1 / 0 / NaN per sample
+cmp = pr.compare_phenotypes(groups, "RHOA", vpres, rpt)
+
+cmp.summary      # (group, score): n, mean, median, auc and p against the reference (G, RPT, MPS scales)
+cmp.pairwise     # group vs group
+cmp.cross        # how do the samples of one group score on the MPS scale defined by the other?
+cmp.scores       # per sample (group label, G, RPT, MPS[<group>]) for plotting
+```
+
+- The **reference** is every sample that is 0 in *all* groups, so carriers of the other alteration are
+  not wild type. Samples in several groups ("overlap") and samples not profiled for a group are left
+  out. Each group is compared on its own samples only.
+- `cross` is the phenocopy test: scale A is defined by A vs reference; B was not used for that scale,
+  so B scoring high on it (`frac_mutant_phenotype`, `auc`, `p`) means B looks like A. Check both
+  directions. Where scale == group (`in_sample=True`) the value is optimistic.
+- `auc` is the probability that a group sample has a higher value than a reference sample
+  (0.5 = no difference); `p` is a two-sided Mann-Whitney test, not corrected for multiple testing.
+
