@@ -250,36 +250,80 @@ def locus_specific_mps(variants: pd.DataFrame,
                        sep: str = ":",
                        min_samples: int = 2,
                        min_mps: int = 10,
-                       min_wt: int = 10):
-    """Locus-specific analysis of individual variants (Alvarez et al., Fig. 6a).
+                       min_wt: int = 10,
+                       exclude_other_variants: bool = True):
+    """Locus-specific analysis of individual variants (Alvarez et al., Fig. 6).
+
+    Every variant (e.g. ``KRAS:G12D``) is compared with the *wild-type* samples of its gene:
+    its carriers are tested for their effect on the activity (G, RPT) and expression of the
+    gene's protein (aREA association), and, if there are enough carriers, scored with the
+    mutant phenotype score.
+
+    Which samples count as wild type
+    --------------------------------
+    A variant matrix has a 0 for a variant in every sample that does not carry it, including
+    samples with a *different* variant of the same gene. These are not wild type and would
+    dilute the comparison. The "state" of a gene in a sample is therefore derived first:
+    1 = any variant, 0 = no variant, NaN = not profiled. Then
+
+    - MPS: the WT density is estimated on samples with gene state 0 only. RL is still
+      evaluated for every sample, so carriers of other variants get a score, too.
+    - association (``exclude_other_variants=True``, default): carriers of other variants are
+      removed from the test (set to NaN) so that the variant is compared with WT samples
+      only. Their number is reported in ``n_other_variants``. With ``False`` the variant is
+      tested against all other samples, as a plain ``mutation_association`` would do.
+    - not-profiled samples (NaN) never take part.
+
+    For this to work ``variants`` must contain **all** variants of a gene, not only the
+    frequent ones: carriers of a dropped variant would look like wild type. Filter with
+    ``min_samples`` / ``min_mps`` here, not beforehand. Likewise it should include variants
+    of unknown significance, not only the drivers.
 
     Parameters
     ----------
     variants : pd.DataFrame
-        Binary variants x samples; row ids are ``"GENE<sep>variant"``.
+        Binary variants x samples; row ids are ``"GENE<sep>variant"`` (e.g. ``"TP53:R175H"``).
+        NaN = gene not profiled in the sample.
     activity, rpt, expression : pd.DataFrame
         G-activity, RPT-activity and (optionally) mRNA, genes x samples.
+    sep : str
+        Separator of gene and variant in the row ids.
     min_samples : int
         Minimum carriers for the aREA association (paper: 2).
     min_mps : int
         Minimum carriers for the per-variant MPS (paper: 10).
     min_wt : int
-        Minimum WT samples for the per-variant MPS.
+        Minimum WT samples (gene state 0) for the per-variant MPS.
+    exclude_other_variants : bool
+        Exclude carriers of other variants of the gene from the association test.
 
     Returns
     -------
     (assoc, mps) : tuple of DataFrame
-        ``assoc``: output of :func:`mutation_association` (needs R) with the
-        traits G, RPT and, if given, expr; ``p_min`` integrates G and RPT
-        only, as in the paper. ``mps``: per-variant MPS, variants x samples.
+        ``assoc``: one row per variant with ``n_mut``, ``n_other_variants``, and per trait
+        (G, RPT, expr) ``nes_<t>`` (> 0: carriers have higher values) and ``p_<t>``, plus
+        ``p_min`` / ``trait_min`` over G and RPT as in the paper (needs R).
+        ``mps``: MPS of the variants with enough carriers, variants x samples.
 
-    Notes
-    -----
-    Not-profiled samples (NaN in ``variants``) are excluded from the association
-    test and from the WT group. For the per-variant MPS the "WT" group is the
-    set of samples with *no* mutation in the gene (carriers of other variants are not counted as WT,
-    since they would blur the WT density), while RL is still evaluated for
-    every sample. This is a choice, not stated explicitly in the paper.
+    Examples
+    --------
+    From a cBioPortal "alterations across samples" export, with ``cbiokit`` (all variants,
+    not only drivers; ``emat`` is the expression matrix the activity was computed from)::
+
+        import cbiokit as cbk, pyrea as pr
+
+        ex = cbk.read_alteration_export("alterations_across_samples.tsv")
+        variants = cbk.alteration_matrix(ex, types=("MUT",), level="event", drivers_only=False,
+                                         by="PATIENT_ID")[emat.columns]
+        assoc, mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat)
+
+        assoc.loc[assoc.index.str.startswith("TP53:")].sort_values("p_min").head()
+        pr.plot_mps_rank(mps.loc["TP53:R175H"], variants.loc["TP53:R175H"])
+
+    Compare with the gene-level view of the same data, where all variants are pooled::
+
+        gene = cbk.alteration_matrix(ex, types=("MUT",), drivers_only=False, by="PATIENT_ID")[emat.columns]
+        pr.mutant_phenotype_score(gene, vpres, rpt)
     """
     genes = pd.Series(variants.index.str.split(sep, n=1).str[0], index=variants.index)
     traits = {"G": activity}
@@ -289,19 +333,25 @@ def locus_specific_mps(variants: pd.DataFrame,
     if expression is not None:
         traits["expr"] = expression
 
-    assoc = mutation_association(variants, traits, integrate=integrate,
-                                 min_mut=min_samples, key=genes)
+    # gene state per sample: 1 any variant, 0 none, NaN not profiled; broadcast back to variant rows
+    state = variants.groupby(genes.to_numpy()).max()
+    per_variant = state.reindex(genes.to_numpy()).set_axis(variants.index)
 
-    samples = _common_samples(variants, activity, *( [rpt] if rpt is not None else []))
+    other = (per_variant == 1) & (variants != 1) & variants.notna()
+    tested = variants.astype(float).mask(other) if exclude_other_variants else variants
+    assoc = mutation_association(tested, traits, integrate=integrate, min_mut=min_samples, key=genes)
+    n_other = other.sum(axis=1) if exclude_other_variants else pd.Series(0, index=variants.index)
+    assoc.insert(1, "n_other_variants", n_other.reindex(assoc.index).to_numpy())
+
+    samples = _common_samples(variants, activity, *([rpt] if rpt is not None else []))
     mut_traits = [activity] if rpt is None else [activity, rpt]
-    gene_state = variants.loc[:, samples].groupby(genes).max()  # 1 any variant, 0 none, NaN not profiled
     rows = {}
     for vid in variants.index:
         carriers = variants.loc[vid, samples].to_numpy(dtype=float) == 1
         gene = genes[vid]
         if carriers.sum() < min_mps or gene not in activity.index:
             continue
-        wt = (gene_state.loc[gene] == 0).to_numpy()
+        wt = (state.loc[gene, samples] == 0).to_numpy()
         if wt.sum() < min_wt:
             continue
         rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples)

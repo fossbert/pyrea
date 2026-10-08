@@ -61,3 +61,65 @@ res = pr.Gsea1T(signature, regulon)
 `pyrea/data/` ships MSigDb v7.4 collections (Hallmark, PID, Reactome,
 WikiPathways; human + mouse symbols) plus a human/mouse homology map, loaded
 via `load_genesets(collection, species)` / `load_species_converter(keys)`.
+
+## Mutant phenotype score and locus-specific variants
+
+Implements the mutant phenotype score (MPS) of
+[Alvarez et al., Nat Genet 2016](https://doi.org/10.1038/ng.3593): how much does a sample's
+VIPER activity of a protein resemble that of the samples with a mutation in its gene, compared
+with wild type?
+
+```python
+import pyrea as pr
+
+vpres = pr.viper_activity(emat, regulon)          # global activity (G)
+rpt = pr.viper_rpt(vpres, emat)                   # residual post-translational activity
+
+# genes x samples, 1 = mutated, 0 = wild type, NaN = not profiled (excluded from both groups)
+mps = pr.mutant_phenotype_score(mutations, vpres, rpt)       # genes x samples, in [-1, 1]
+pr.classify_phenotype(mps.loc["ERBB2"])                       # mutant / wt / intermediate (LR > 3, RL > 0.5)
+pr.plot_mps_rank(mps.loc["ERBB2"], mutations.loc["ERBB2"])   # samples ranked by MPS, carriers marked
+```
+
+Rows that are not genes (e.g. a gene fusion) are scored on the activity of one or more chosen
+proteins:
+
+```python
+summary, mps = pr.mps_targets(fusion_matrix, ["RHOA", "PTK2", "YAP1"], vpres, rpt, expression=emat)
+```
+
+### Individual variants (locus-specific)
+
+Different variants of one gene can act differently (e.g. *KRAS* G12D vs G13D, nonsense vs
+missense *TP53*). `locus_specific_mps` takes a matrix of variants (rows `"GENE:variant"`):
+
+```python
+import cbiokit as cbk
+
+ex = cbk.read_alteration_export("alterations_across_samples.tsv")
+variants = cbk.alteration_matrix(ex, types=("MUT",), level="event",
+                                 drivers_only=False, by="PATIENT_ID")[emat.columns]
+assoc, mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat,
+                                   min_samples=3, min_mps=10)
+
+assoc.loc[assoc.index.str.startswith("KRAS:")].sort_values("p_min")
+pr.plot_mps_rank(mps.loc["TP53:R175H"], variants.loc["TP53:R175H"])
+```
+
+Things to know:
+
+- **Wild type is the gene's wild type.** In a variants matrix a sample with a *different*
+  variant of the same gene is also 0, but it is not wild type. `locus_specific_mps` first
+  derives the gene state (any variant / none / not profiled). The MPS densities use samples
+  without any mutation in the gene as WT; the association excludes carriers of other variants
+  (`exclude_other_variants=True`, count in `n_other_variants`; set `False` to test against all
+  other samples).
+- **Pass all variants of a gene.** Carriers of a variant you filtered out beforehand would look
+  like wild type. Filter with `min_samples` / `min_mps`, not before.
+- **Include variants of unknown significance** (`drivers_only=False` in cbiokit); the paper uses
+  all non-silent mutations, not only annotated drivers.
+- Few carriers mean noisy tests: `min_samples=2` (paper) yields many p-values, and `p_min` (the
+  smaller of G and RPT) is not corrected for multiple testing. The MPS itself needs at least
+  `min_mps` carriers (default 10).
+- The pan-cancer integration over tumour types (paper Fig. 6b) is not implemented.
+

@@ -184,3 +184,36 @@ def test_mps_targets_without_association_and_missing_target(data):
     assert "p_min" not in summ.columns
     assert summ.loc[("GENE_A", "NOPE")].drop(["n_mut", "n_wt"]).isna().all()
     assert list(mps.index) == [("GENE_A", "GENE_A")]
+
+
+@viper
+def test_locus_specific_excludes_other_variants(data):
+    mut, G, R = data
+    carriers = list(mut.columns[mut.loc["GENE_A"] == 1])  # all 20 have low G
+    v = pd.DataFrame(0, index=["GENE_A:X", "GENE_A:Y"], columns=mut.columns)
+    v.loc["GENE_A:X", carriers[:12]] = 1
+    v.loc["GENE_A:Y", carriers[12:]] = 1
+    on, _ = pr.locus_specific_mps(v, G, R, min_samples=2)
+    off, _ = pr.locus_specific_mps(v, G, R, min_samples=2, exclude_other_variants=False)
+    assert on.loc["GENE_A:X", "n_other_variants"] == 8 and on.loc["GENE_A:Y", "n_other_variants"] == 12
+    assert (off["n_other_variants"] == 0).all()
+    # Y carriers (low G too) polluted the comparison group: excluding them sharpens the signal
+    assert on.loc["GENE_A:X", "nes_G"] < off.loc["GENE_A:X", "nes_G"] < 0
+
+
+def test_locus_specific_mps_wt_is_gene_wildtype(data):
+    mut, G, R = data
+    carriers = list(mut.columns[mut.loc["GENE_A"] == 1])
+    v = pd.DataFrame(0, index=["GENE_A:X", "GENE_A:Y"], columns=mut.columns)
+    v.loc["GENE_A:X", carriers[:12]] = 1
+    v.loc["GENE_A:Y", carriers[12:]] = 1
+    v.loc["GENE_A:Y", mut.columns[0]] = np.nan if mut.columns[0] not in carriers else 1
+    # association needs R; the MPS part does not -> call the MPS part via a tiny wrapper-free path
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pr.mps, "mutation_association", lambda *a, **k: pd.DataFrame({"n_mut": []}))
+        _, mps = pr.locus_specific_mps(v, G, R, min_mps=10)
+    assert list(mps.index) == ["GENE_A:X"]                      # Y has only 8 carriers
+    m = v.loc["GENE_A:X"] == 1
+    assert mps.loc["GENE_A:X", m].mean() > 0.5
+    # Y carriers got a score although they are neither X carriers nor WT
+    assert mps.loc["GENE_A:X", carriers[12:]].notna().all()
