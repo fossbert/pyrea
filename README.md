@@ -32,6 +32,14 @@ BiocManager::install("viper")
 | `pyrea.Viper` | `Viper` -- VIPER regulon activity inference |
 | `pyrea.utils` | `gene_sets_to_regulon`, `sig_to_reg`, `load_genesets`, `load_species_converter` |
 | `pyrea.plotting` | internal plotting helpers used by the classes above |
+| `pyrea.mps` | Mutant phenotype score (Alvarez et al. 2016): `relative_likelihood`, `mutant_phenotype_score`, `classify_phenotype`, `mutation_association`, `locus_specific_mps`. Only the association tests need R |
+| `pyrea.mps_plot` | `plot_mps_rank`, `plot_rl_diagnostic` |
+
+```python
+mps = pr.mutant_phenotype_score(mutations, vpres, rpt)       # genes x samples, in [-1, 1]
+pr.classify_phenotype(mps.loc["ERBB2"])                       # mutant / wt / intermediate (LR > 3)
+assoc, var_mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat)  # rows "GENE:variant"
+```
 
 The public API is re-exported at the top level:
 
