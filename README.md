@@ -33,9 +33,15 @@ BiocManager::install("viper")
 | `pyrea.utils` | `gene_sets_to_regulon`, `sig_to_reg`, `load_genesets`, `load_species_converter` |
 | `pyrea.plotting` | internal plotting helpers used by the classes above |
 | `pyrea.mps` | Mutant phenotype score (Alvarez et al. 2016): `relative_likelihood`, `mutant_phenotype_score`, `classify_phenotype`, `mutation_association`, `locus_specific_mps`. Only the association tests need R |
+| `pyrea.rbackend.viper` | `viper_activity` -- `viper::viper` (mad/rank/... signatures) for protein activity, as DataFrame (needs R) |
+| `pyrea.rbackend.regulon` | `read_regulon_rds` -- ARACNe/viper regulon from `.rds` to long format (needs R) |
+| `pyrea.rpt` | `viper_rpt` -- residual post-translational activity, pure Python, matches `viper::viperRPT` |
 | `pyrea.mps_plot` | `plot_mps_rank`, `plot_rl_diagnostic` |
 
 ```python
+reg = pr.read_regulon_rds("FullReg.rds")
+vpres = pr.viper_activity(emat, reg)                         # method='mad'
+rpt = pr.viper_rpt(vpres, emat)                              # method='rank'
 mps = pr.mutant_phenotype_score(mutations, vpres, rpt)       # genes x samples, in [-1, 1]
 pr.classify_phenotype(mps.loc["ERBB2"])                       # mutant / wt / intermediate (LR > 3)
 assoc, var_mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat)  # rows "GENE:variant"

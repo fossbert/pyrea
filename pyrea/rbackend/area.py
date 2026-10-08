@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from . import r_package, require_rpy2
+from .regulon import regulon_to_r
 
 __all__ = ["aREA"]
 
@@ -46,9 +47,6 @@ def aREA(dset, regulon, minsize=20, dset_filter=False):
     ro, pandas2ri, localconverter, importr = require_rpy2()
     viper = r_package("viper")
 
-    if not all(regulon.columns.values == np.array(["source", "target", "mor", "likelihood"])):
-        regulon = regulon.set_axis(["source", "target", "mor", "likelihood"], axis=1)
-
     if dset_filter:
         dset = dset.loc[dset.index.isin(regulon["target"])]
 
@@ -58,14 +56,7 @@ def aREA(dset, regulon, minsize=20, dset_filter=False):
     with localconverter(ro.default_converter + pandas2ri.converter):
         eset_r = ro.conversion.py2rpy(frame)
 
-    reg_entries = {}
-    for source, grp in regulon.groupby("source", observed=True):
-        tfmode = ro.FloatVector(grp["mor"].to_numpy(dtype=float))
-        tfmode.names = ro.StrVector(grp["target"].astype(str))
-        likelihood = ro.FloatVector(grp["likelihood"].to_numpy(dtype=float))
-        reg_entries[source] = ro.ListVector({"tfmode": tfmode, "likelihood": likelihood})
-    regulon_r = ro.ListVector(reg_entries)
-    regulon_r.rclass = ro.StrVector(["regulon"])
+    regulon_r = regulon_to_r(regulon)
 
     res = viper.aREA(eset_r, regulon_r, minsize=minsize)
     nes = res.rx2("nes")
