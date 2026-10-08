@@ -117,7 +117,9 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
     Parameters
     ----------
     mutations : pd.DataFrame
-        Binary (1 = mutated) genes x samples.
+        Binary (1 = mutated, 0 = WT) genes x samples. NaN (e.g. gene not
+        profiled in the sample) excludes the sample from both groups for
+        that gene; its MPS is still evaluated.
     activity : pd.DataFrame
         VIPER-inferred global activity (G), proteins x samples.
     rpt : pd.DataFrame, optional
@@ -143,10 +145,11 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
     for gene in mutations.index:
         if gene not in activity.index:
             continue
-        m = mutations.loc[gene, samples].to_numpy() == 1
-        if m.sum() < min_mut or (~m).sum() < min_wt:
+        row = mutations.loc[gene, samples].to_numpy(dtype=float)
+        m, wt = row == 1, row == 0  # NaN = not profiled: neither mutant nor WT
+        if m.sum() < min_mut or wt.sum() < min_wt:
             continue
-        rows[gene] = _gene_rl(gene, m, ~m, traits, samples)
+        rows[gene] = _gene_rl(gene, m, wt, traits, samples)
     return pd.DataFrame.from_dict(rows, orient="index", columns=samples)
 
 
@@ -208,9 +211,11 @@ def mutation_association(mutations: pd.DataFrame,
     samples = _common_samples(mutations, *traits.values())
     rows = {}
     for rid in mutations.index:
-        carriers = list(samples[mutations.loc[rid, samples].to_numpy() == 1])
+        row = mutations.loc[rid, samples].to_numpy(dtype=float)
+        carriers = list(samples[row == 1])
         if len(carriers) < min_mut:
             continue
+        keep = samples[~np.isnan(row)]  # drop samples not profiled for this row
         gene = rid if key is None else key[rid]
         reg = gene_sets_to_regulon({rid: carriers}, minsize=min_mut)
         rec = {"n_mut": len(carriers)}
@@ -218,7 +223,7 @@ def mutation_association(mutations: pd.DataFrame,
             if gene not in tr.index:
                 rec[f"nes_{name}"] = rec[f"p_{name}"] = np.nan
                 continue
-            sig = tr.loc[gene, samples].astype(float).rename(name)
+            sig = tr.loc[gene, keep].astype(float).rename(name)
             nes = float(aREA(sig, reg, minsize=min_mut).iloc[0, 0])
             rec[f"nes_{name}"] = nes
             rec[f"p_{name}"] = 2 * norm.sf(abs(nes)) if np.isfinite(nes) else np.nan
@@ -261,8 +266,9 @@ def locus_specific_mps(variants: pd.DataFrame,
 
     Notes
     -----
-    For the per-variant MPS the "WT" group is the set of samples with *no*
-    mutation in the gene (carriers of other variants are not counted as WT,
+    Not-profiled samples (NaN in ``variants``) are excluded from the association
+    test and from the WT group. For the per-variant MPS the "WT" group is the
+    set of samples with *no* mutation in the gene (carriers of other variants are not counted as WT,
     since they would blur the WT density), while RL is still evaluated for
     every sample. This is a choice, not stated explicitly in the paper.
     """
@@ -279,14 +285,14 @@ def locus_specific_mps(variants: pd.DataFrame,
 
     samples = _common_samples(variants, activity, *( [rpt] if rpt is not None else []))
     mut_traits = [activity] if rpt is None else [activity, rpt]
-    any_mut = variants.loc[:, samples].groupby(genes).max() > 0
+    gene_state = variants.loc[:, samples].groupby(genes).max()  # 1 any variant, 0 none, NaN not profiled
     rows = {}
     for vid in variants.index:
-        carriers = variants.loc[vid, samples].to_numpy() == 1
+        carriers = variants.loc[vid, samples].to_numpy(dtype=float) == 1
         gene = genes[vid]
         if carriers.sum() < min_mps or gene not in activity.index:
             continue
-        wt = ~any_mut.loc[gene].to_numpy()
+        wt = (gene_state.loc[gene] == 0).to_numpy()
         if wt.sum() < min_wt:
             continue
         rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples)

@@ -128,3 +128,27 @@ def test_locus_specific(rng, data):
     assert list(mps.index) == ["GENE_A:p.X1Y"]  # passenger has only 8 carriers < min_mps
     m = v.loc["GENE_A:p.X1Y"] == 1
     assert mps.loc["GENE_A:p.X1Y", m].mean() > 0.5
+
+
+def test_mps_nan_excludes_not_profiled(data):
+    mut, G, R = data
+    m = mut.astype(float)
+    nanned = list(m.columns[(m.loc["GENE_A"] == 0).to_numpy()][:15])
+    m.loc["GENE_A", nanned] = np.nan
+    # reference: same data, those samples removed from the groups but still scored
+    full = pr.mutant_phenotype_score(mut, G, R, min_wt=1)
+    res = pr.mutant_phenotype_score(m, G, R, min_wt=1)
+    assert res.shape == full.shape and res.loc["GENE_A"].notna().all()
+    assert not np.allclose(res.loc["GENE_A"], full.loc["GENE_A"])  # WT density changed
+    # NaN must not be treated as WT: with too few real WT samples the gene is skipped
+    assert "GENE_A" not in pr.mutant_phenotype_score(m, G, R, min_wt=(mut.loc["GENE_A"] == 0).sum() - 14)
+
+
+@viper
+def test_association_ignores_not_profiled(data):
+    mut, G, R = data
+    m = mut.astype(float)
+    wt_cols = list(m.columns[(m.loc["GENE_A"] == 0).to_numpy()])
+    m.loc["GENE_A", wt_cols[:20]] = np.nan
+    res = pr.mutation_association(m, {"G": G}, min_mut=10)
+    assert res.loc["GENE_A", "n_mut"] == 20 and res.loc["GENE_A", "nes_G"] < -3
