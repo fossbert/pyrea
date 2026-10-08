@@ -162,3 +162,25 @@ def test_mps_key_maps_rows_to_genes(data):
     assert list(res.index) == ["A-B fusion"]
     np.testing.assert_allclose(res.iloc[0], ref.iloc[0])
     assert pr.mutant_phenotype_score(fus, G, R).empty        # unmapped row is no gene
+
+
+@viper
+def test_mps_targets_scan(data):
+    mut, G, R = data
+    fus = mut.loc[["GENE_A"]].rename(index={"GENE_A": "fusion"})
+    summ, mps = pr.mps_targets(fus, ["GENE_A", "GENE_C"], G, R, min_mut=10, min_wt=10)
+    assert list(summ.index) == [("fusion", "GENE_A"), ("fusion", "GENE_C")]   # order kept
+    a, c = summ.loc[("fusion", "GENE_A")], summ.loc[("fusion", "GENE_C")]
+    assert a["n_mut"] == 20 and a["nes_G"] < -3 and a["trait_min"] == "G"
+    assert a["mps_mut"] > 0.5 > -0.5 > a["mps_wt"]
+    assert a["frac_mut_phenotype"] > a["frac_mut_phenotype_wt"]
+    assert c["p_min"] > a["p_min"]
+    assert mps.shape == (2, G.shape[1]) and mps.index.names == ["row", "target"]
+
+
+def test_mps_targets_without_association_and_missing_target(data):
+    mut, G, R = data
+    summ, mps = pr.mps_targets(mut.loc[["GENE_A"]], {"GENE_A": ["GENE_A", "NOPE"]}, G, R, associate=False)
+    assert "p_min" not in summ.columns
+    assert summ.loc[("GENE_A", "NOPE")].drop(["n_mut", "n_wt"]).isna().all()
+    assert list(mps.index) == [("GENE_A", "GENE_A")]

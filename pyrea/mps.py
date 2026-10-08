@@ -18,7 +18,8 @@ the association test uses :func:`pyrea.aREA` and therefore needs R.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence
+import warnings
+from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ __all__ = [
     "classify_phenotype",
     "mutation_association",
     "locus_specific_mps",
+    "mps_targets",
 ]
 
 DEFAULT_LR = 3.0
@@ -305,3 +307,88 @@ def locus_specific_mps(variants: pd.DataFrame,
         rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples)
     mps = pd.DataFrame.from_dict(rows, orient="index", columns=samples)
     return assoc, mps
+
+
+def mps_targets(mutations: pd.DataFrame,
+                targets: Union[Sequence[str], Mapping[str, Sequence[str]]],
+                activity: pd.DataFrame,
+                rpt: Optional[pd.DataFrame] = None,
+                expression: Optional[pd.DataFrame] = None,
+                associate: bool = True,
+                min_mut: int = 10,
+                min_wt: int = 10,
+                lr: float = DEFAULT_LR):
+    """Test mutation rows (e.g. a gene fusion) against the activity of chosen target proteins.
+
+    Typical use: a fusion or hotspot that is not itself a protein, tested for its effect on the
+    activity of one or more candidate proteins, e.g. ``targets=["RHOA", "PTK2", "YAP1"]``.
+    Each (row, target) pair is a separate test; the order of ``targets`` is kept, so a
+    primary target can simply be listed first. P-values are not corrected for the number of
+    targets.
+
+    Parameters
+    ----------
+    mutations : pd.DataFrame
+        Binary rows x samples, NaN = not profiled (see :func:`mutant_phenotype_score`).
+    targets : sequence of str, or mapping row id -> sequence of str
+        Target proteins for every row, or per row.
+    activity, rpt, expression : pd.DataFrame
+        G-activity, RPT-activity (optional) and mRNA (optional), genes x samples.
+    associate : bool
+        Add the aREA association with the traits (needs R); otherwise only the MPS summary.
+    min_mut, min_wt : int
+        As in :func:`mutant_phenotype_score`; pairs below the thresholds get no MPS (NaN).
+    lr : float
+        Likelihood ratio defining the mutant / WT phenotype (default 3, RL > 0.5).
+
+    Returns
+    -------
+    (summary, mps) : tuple
+        ``summary``: one row per (row, target) with ``n_mut``, ``n_wt``,
+        ``mps_mut`` / ``mps_wt`` (mean MPS of carriers / WT), ``frac_mut_phenotype`` (share of
+        carriers with the MPS-defined mutant phenotype), ``frac_mut_phenotype_wt`` (same among WT
+        samples) and, with ``associate``, ``nes_G``, ``p_G``, ``nes_RPT``, ``p_RPT``
+        (``nes_expr``, ``p_expr``), ``p_min`` and ``trait_min`` (G and RPT only). NES > 0 =
+        carriers have higher activity. ``mps``: MPS per (row, target) x sample (MultiIndex).
+    """
+
+    traits = {"G": activity}
+    if rpt is not None:
+        traits["RPT"] = rpt
+    integrate = list(traits)
+    if expression is not None:
+        traits["expr"] = expression
+
+    def _targets(rid):
+        return list(targets[rid]) if isinstance(targets, Mapping) else list(targets)
+
+    rows, mps_rows = [], {}
+    samples = _common_samples(mutations, activity, *([rpt] if rpt is not None else []))
+    thr = lr_to_rl(lr)
+    for rid in mutations.index:
+        row = mutations.loc[rid, samples].to_numpy(dtype=float)
+        carriers, wt = row == 1, row == 0
+        for tgt in _targets(rid):
+            rec = {"row": rid, "target": tgt, "n_mut": int(carriers.sum()), "n_wt": int(wt.sum())}
+            if tgt not in activity.index:
+                warnings.warn(f"Target {tgt!r} has no activity (not in the regulon); skipped")
+                rows.append(rec)
+                continue
+            one = mutations.loc[[rid]]
+            mps = mutant_phenotype_score(one, activity, rpt, min_mut=min_mut, min_wt=min_wt, key={rid: tgt})
+            if len(mps):
+                v = mps.iloc[0].to_numpy()
+                mps_rows[(rid, tgt)] = mps.iloc[0]
+                rec.update(mps_mut=np.nanmean(v[carriers]), mps_wt=np.nanmean(v[wt]),
+                           frac_mut_phenotype=np.nanmean(v[carriers] > thr),
+                           frac_mut_phenotype_wt=np.nanmean(v[wt] > thr))
+            if associate:
+                a = mutation_association(one, traits, integrate=integrate, min_mut=min_mut, key={rid: tgt})
+                if len(a):
+                    rec.update(a.iloc[0].drop("n_mut").to_dict())
+            rows.append(rec)
+
+    summary = pd.DataFrame(rows).set_index(["row", "target"])
+    mps_df = pd.DataFrame(mps_rows).T if mps_rows else pd.DataFrame(columns=samples)
+    mps_df.index = pd.MultiIndex.from_tuples(mps_df.index, names=["row", "target"]) if len(mps_df) else mps_df.index
+    return summary, mps_df
