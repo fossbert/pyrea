@@ -147,3 +147,63 @@ cmp.scores       # per sample (group label, G, RPT, MPS[<group>]) for plotting
 - `auc` is the probability that a group sample has a higher value than a reference sample
   (0.5 = no difference); `p` is a two-sided Mann-Whitney test, not corrected for multiple testing.
 
+### Does the effect differ between subtypes? (stratified comparison)
+
+Pooling subtypes mixes the effect of an alteration with baseline differences between them (VIPER
+activity with `method="mad"` is relative to the whole cohort). Compare mutants with wild types
+*within* each stratum, then test whether the effect differs:
+
+```python
+res = pr.stratified_comparison(arid1a, subtype, "ARID1A", vpres, rpt, expression=emat)
+
+res.effects        # (stratum, trait): n_mut, n_wt, auc, bootstrap 95 % interval, Mann-Whitney p
+res.interaction    # p of the mutation x stratum term (rank-based linear model), per trait
+res.pairwise       # AUC difference between two strata with bootstrap interval and p
+
+diff = pr.differential_activity(arid1a, vpres, subtype)    # the same for every regulator
+diff.sort_values("interaction:p").head()                   # <stratum>:auc/p/q, interaction:p/q
+```
+
+- `auc` is the probability that a mutant has a higher value than a wild type *of the same stratum*
+  (0.5 = no effect). Read it with its interval: with few mutants the intervals are wide.
+- Two separate p-values (significant in one stratum, not in the other) are no evidence for a
+  difference; use `interaction` / `pairwise`.
+- Strata need `min_group` mutants and wild types (default 3); others are left out. `group` is
+  1 / 0 / NaN as everywhere (NaN = neither mutant nor wild type).
+- Nothing is corrected for multiple testing except the `q` columns of `differential_activity`
+  (Benjamini-Hochberg over the regulators). Under random labels the p-values are uniform.
+
+## Clustering samples by protein activity
+
+`pyrea.cluster` follows the *Unsupervised data analysis* of
+[Alvarez et al., Nat Genet 2018](https://doi.org/10.1038/s41588-018-0138-4):
+
+```python
+res = pr.cluster_samples(vpres)                       # VIPER similarity, PAM, k from the cluster reliability
+res.k, res.scores                                     # chosen k; global reliability for every k tried
+res.labels.value_counts()                             # cluster 1..k, largest first
+res.reliability                                       # per patient: nes and scaled reliability
+pd.crosstab(res.labels, subtype)
+
+pr.cluster_samples(pr.zscore_signature(expr), similarity="correlation")   # expression instead (Pearson)
+
+emb = pr.tsne_embedding(vpres, perplexity=40, n_iter=5000)                # needs scikit-learn (pyrea[cluster])
+pr.ari_permutation_test(res.labels, other_labels, n_perm=10000)           # adjusted Rand index and p
+```
+
+Building blocks: `zscore_signature`, `viper_similarity` (= `viper::viperSimilarity`),
+`similarity_to_distance`, `pam` (= `cluster::pam`: BUILD + SWAP), `cluster_reliability`,
+`adjusted_rand_index`. `viper_similarity`, the distance and `pam` are checked against R in the tests.
+
+- **Cluster reliability.** For every sample the members of its cluster are a gene set and the
+  negative distances to all other samples the signature; the aREA NES says how close the cluster
+  mates are. The scores are scaled to [0, 1] and averaged (= area over the cumulative curve) per
+  cluster and overall; k is the first local maximum of the global value.
+- **Neither the manuscript nor its supplement says how the scores are scaled** (Supplementary Fig. 2d-g only
+  shows the result). Both options are kept in `res.scores`; compare them before trusting k. The default (`scale="bounds"`) uses the
+  smallest and largest NES possible for a cluster of that size, so that 0.5 is chance level and
+  values are comparable between k. `scale="minmax"` scales within the partition; then the global
+  value hardly tells good from random partitions (a synthetic test shows it).
+- With continuous data the global reliability keeps rising with k and the first local maximum can
+  be fragile: look at `res.scores` before using the clusters.
+
