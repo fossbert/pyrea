@@ -30,16 +30,26 @@ def regulon_to_r(regulon: pd.DataFrame):
 
 
 def frame_to_r_matrix(frame: pd.DataFrame):
-    """DataFrame -> numeric R matrix keeping row and column names."""
-    ro, pandas2ri, localconverter, _ = require_rpy2()
-    with localconverter(ro.default_converter + pandas2ri.converter):
-        df_r = ro.conversion.py2rpy(frame.astype(float))
-    return ro.r["as.matrix"](df_r)
+    """DataFrame -> numeric R matrix keeping row and column names.
+
+    The values are copied into R memory explicitly. (Converting a temporary ``frame.astype(float)``
+    with pandas2ri and calling ``as.matrix`` afterwards let R read memory of an already freed numpy
+    array: results were intermittently NaN or wrong.)
+    """
+    ro, *_ = require_rpy2()
+    values = np.ascontiguousarray(frame.to_numpy(dtype=float))
+    flat = values.ravel(order="F")                         # kept alive until R has made its own matrix
+    mat = ro.r["matrix"](ro.FloatVector(flat), nrow=values.shape[0], ncol=values.shape[1])
+    set_dimnames = ro.r("function(m, r, c) { dimnames(m) <- list(r, c); m }")
+    mat = set_dimnames(mat, ro.StrVector([str(i) for i in frame.index]), ro.StrVector([str(c) for c in frame.columns]))
+    del flat, values
+    return mat
 
 
 def matrix_from_r(mat) -> pd.DataFrame:
     """R matrix with dimnames -> DataFrame."""
-    return pd.DataFrame(np.asarray(mat), index=list(mat.rownames), columns=list(mat.colnames))
+    # np.array copies: np.asarray would be a view of R memory, which R may reuse after the object is collected
+    return pd.DataFrame(np.array(mat, dtype=float), index=list(mat.rownames), columns=list(mat.colnames))
 
 
 def read_regulon_rds(path) -> pd.DataFrame:
@@ -55,7 +65,7 @@ def read_regulon_rds(path) -> pd.DataFrame:
         entry = dict(zip(entry.names, entry))
         tfmode = entry["tfmode"]
         targets = list(tfmode.names)
-        lik = np.asarray(entry["likelihood"]) if "likelihood" in entry else np.ones(len(targets))
+        lik = np.array(entry["likelihood"], dtype=float) if "likelihood" in entry else np.ones(len(targets))
         frames.append(pd.DataFrame({"source": name, "target": targets,
-                                    "mor": np.asarray(tfmode), "likelihood": lik}))
+                                    "mor": np.array(tfmode, dtype=float), "likelihood": lik}))
     return pd.concat(frames, ignore_index=True)

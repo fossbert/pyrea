@@ -62,7 +62,7 @@ def aREA(dset, regulon, minsize=20, dset_filter=False):
     nes = res.rx2("nes")
 
     nes_df = pd.DataFrame(
-        np.asarray(nes),
+        np.array(nes, dtype=float),   # a copy: np.asarray would be a view of R memory
         index=list(nes.rownames),
         columns=list(nes.colnames),
     )
