@@ -147,6 +147,48 @@ cmp.scores       # per sample (group label, G, RPT, MPS[<group>]) for plotting
 - `auc` is the probability that a group sample has a higher value than a reference sample
   (0.5 = no difference); `p` is a two-sided Mann-Whitney test, not corrected for multiple testing.
 
+#### How to read `cmp.cross` (the phenocopy test)
+
+Question: **does alteration B put the protein into the same state as alteration A?** (A, B: e.g. an activating
+mutation and an amplification, a hotspot and a rare variant, a known driver and a gene fusion.)
+
+1. *Scale of A.* From the activity of the target in the A samples and in the reference (samples with none of the
+   alterations) the relative likelihood `RL(x) = (p_A(x) - p_ref(x)) / (p_A(x) + p_ref(x))` is estimated for every
+   activity value (G and RPT, the one with the larger |RL| counts). RL > 0 means: more like A than like the
+   reference; RL > 0.5 is a likelihood ratio above 3 (the "mutant phenotype" of Alvarez et al.).
+2. *Score B on it.* All samples of B receive their RL on the scale of A. B did not take part in estimating that scale,
+   so a high score is evidence and not circular. Reported per `(scale, group)`: `n`, `mean_rl`,
+   `frac_mutant_phenotype` (share with RL > 0.5), `auc` (probability that a B sample scores higher than a reference
+   sample; 0.5 = no difference) and `p` (Mann-Whitney).
+3. *Both directions.* The same with the scales swapped. Rows with `in_sample=True` (group == scale) show how well A
+   separates from the reference by construction; they are optimistic and serve as the benchmark.
+
+| result | reading |
+| --- | --- |
+| B high on A's scale **and** A high on B's scale | mutual phenocopy: same functional state |
+| B high on A's scale, A not on B's | asymmetric: B resembles A, but A is weaker or more heterogeneous than B (e.g. amplification vs. mutation: the amplification looks "like the mutation, only stronger") |
+| B not above the reference on A's scale | no phenocopy: B does something else, or nothing, to this protein |
+| `in_sample` row low | A itself has no clear phenotype on this protein: nothing to copy |
+
+`cmp.pairwise` answers the complementary question (do A and B differ from each other?). A result that looks
+like a phenocopy in `cross` and shows no difference in `pairwise` is the strongest case.
+
+**What it is good for.** (1) *Functional annotation of non-canonical alterations*: does a fusion, a rare variant or a
+variant of unknown significance perturb the same protein as the established driver (the RHOA mutation vs.
+CLDN18-ARHGAP fusion example)? (2) *Convergence of different alteration types* on one node: amplification and
+mutation of ERBB2, truncating and missense CDH1 variants, deletion and mutation of a tumour suppressor. (3)
+*Hypotheses for patient selection*: samples without the actionable alteration but with the same protein state could
+be candidates for the same targeted drug (the idea behind the wild-type samples with a high MPS in Alvarez et al.,
+Fig. 5a). (4) *Heterogeneity*: carriers that do not show the phenotype are candidates for passengers or subclonal
+alterations.
+
+**Limits.** The scores describe the *state* inferred from the expression of the regulon, not causality; only a
+perturbation or an orthogonal measurement (protein, phospho-protein, drug response) establishes it. Co-amplified
+neighbours can contribute to the activity of an amplified gene (compare G and the expression-adjusted RPT). Groups
+of a few samples give noisy scales; with several targets and comparisons nothing is corrected for multiple testing.
+The reference is shared by all scales, so differences between scales are not caused by different reference
+samples. `compare_phenotypes` is an analysis built on the MPS of Alvarez et al., not a published or validated method.
+
 ### Does the effect differ between subtypes? (stratified comparison)
 
 Pooling subtypes mixes the effect of an alteration with baseline differences between them (VIPER

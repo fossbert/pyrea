@@ -43,6 +43,8 @@ class PhenotypeComparison:
         ``scale``: n, mean RL, ``frac_mutant_phenotype`` (share above the likelihood-ratio
         threshold), ``auc`` / ``p`` against the reference, and ``in_sample`` (True where
         group == scale: the scale was fitted on these samples, so the value is optimistic).
+        Phenocopy: if group B scores high on the scale defined by A (and A on B's scale), the two
+        alterations put the target into the same state. See the README for how to read it.
     """
 
     scores: pd.DataFrame
