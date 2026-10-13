@@ -66,3 +66,29 @@ def test_unknown_target(setup):
     groups, act, rpt = setup
     with pytest.raises(ValueError, match="no activity"):
         pr.compare_phenotypes(groups, "NOPE", act, rpt)
+
+
+def test_group_without_carriers_warns_and_stays_quiet_otherwise(setup):
+    import warnings
+
+    groups, act, rpt = setup
+    ref = pr.compare_phenotypes(groups, "TGT", act, rpt)
+    empty = pd.Series(0.0, index=groups["A"].index)                   # nobody carries it
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        cmp = pr.compare_phenotypes({**groups, "none": empty}, "TGT", act, rpt)
+    assert not [x for x in w if issubclass(x.category, RuntimeWarning)]            # no numpy noise
+    msgs = [str(x.message) for x in w if issubclass(x.category, UserWarning)]
+    assert len(msgs) == 1 and "'none' (n=0)" in msgs[0] and "nobody carries" in msgs[0]
+    assert cmp.scores["MPS[none]"].isna().all()
+    assert cmp.summary.loc[("none", "MPS[none]"), "n"] == 0 and np.isnan(cmp.summary.loc[("none", "G"), "mean"])
+    assert np.isnan(cmp.cross.loc[("none", "A"), "mean_rl"])
+    # the other groups are unaffected by the empty one
+    pd.testing.assert_frame_equal(cmp.summary.loc[["A", "B", "C"]].reindex(ref.summary.loc[["A", "B", "C"]].index), ref.summary.loc[["A", "B", "C"]])
+
+
+def test_no_reference_is_an_error(setup):
+    groups, act, rpt = setup
+    bad = {k: v.where(v == 1) for k, v in groups.items()}               # 1 or NaN, never 0
+    with pytest.raises(ValueError, match="No reference samples"):
+        pr.compare_phenotypes(bad, "TGT", act, rpt)

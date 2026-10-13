@@ -7,6 +7,7 @@ mutant phenotype score of :mod:`pyrea.mps`; no R needed.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Mapping, Optional
@@ -53,6 +54,12 @@ class PhenotypeComparison:
     cross: pd.DataFrame
 
 
+def _nan_stat(func, x: np.ndarray) -> float:
+    """``func`` over the finite values of ``x``; NaN (without a numpy warning) if there are none."""
+    x = x[np.isfinite(x)]
+    return float(func(x)) if len(x) else np.nan
+
+
 def _mwu(x: np.ndarray, y: np.ndarray):
     """AUC (P(x > y) + ties/2) and two-sided Mann-Whitney p; NaN if a group is empty."""
     x, y = x[np.isfinite(x)], y[np.isfinite(y)]
@@ -95,7 +102,8 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
     lr : float
         Likelihood ratio for the mutant phenotype (3 = RL > 0.5).
     min_group : int
-        Groups with fewer samples get no MPS scale (NaN).
+        Groups with fewer samples get no MPS scale (NaN); a warning names them (``n=0``: nobody carries
+        the alteration, e.g. no amplification events of that gene in the export).
 
     Returns
     -------
@@ -140,6 +148,15 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
         scores[name] = tr.loc[target, samples].to_numpy(dtype=float)
 
     refv = ref.to_numpy()
+    if not refv.any():
+        raise ValueError("No reference samples: no sample is 0 in all groups. Check the groups "
+                         "(a group that is 1 or NaN everywhere leaves no reference).")
+    small = {k: int(m.sum()) for k, m in exclusive.items() if m.sum() < min_group}
+    if small:
+        warnings.warn("Groups with fewer than min_group=%d samples get no MPS scale (their scores are NaN): %s"
+                      % (min_group, ", ".join(f"'{k}' (n={n})" for k, n in small.items())
+                         + ("; n=0 means nobody carries the alteration" if 0 in small.values() else "")),
+                      UserWarning, stacklevel=2)
     for k, m in exclusive.items():
         rl = np.full(len(samples), np.nan)
         if m.sum() >= min_group:
@@ -154,12 +171,12 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
     rows = {}
     for c in cols:
         x = scores[c].to_numpy()
-        rows[(reference, c)] = {"n": int(refv.sum()), "mean": np.nanmean(x[refv]), "median": np.nanmedian(x[refv])}
+        rows[(reference, c)] = {"n": int(refv.sum()), "mean": _nan_stat(np.mean, x[refv]), "median": _nan_stat(np.median, x[refv])}
         for k in names:
             m = exclusive[k].to_numpy()
             auc, p = _mwu(x[m], x[refv])
-            rows[(k, c)] = {"n": int(m.sum()), "mean": np.nanmean(x[m]) if m.any() else np.nan,
-                            "median": np.nanmedian(x[m]) if m.any() else np.nan, "auc": auc, "p": p}
+            rows[(k, c)] = {"n": int(m.sum()), "mean": _nan_stat(np.mean, x[m]), "median": _nan_stat(np.median, x[m]),
+                            "auc": auc, "p": p}
     summary = pd.DataFrame.from_dict(rows, orient="index")
     summary.index = pd.MultiIndex.from_tuples(summary.index, names=["group", "score"])
 
