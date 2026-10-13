@@ -170,7 +170,7 @@ gene fusion mimics a mutation of the target gene:
 groups = {"RHOA mut": mut.loc["RHOA"], "ARHGAP fusion": fus.loc["CLDN-ARHGAP"]}   # 1 / 0 / NaN per sample
 cmp = pr.compare_phenotypes(groups, "RHOA", vpres, rpt)
 
-cmp.summary      # (group, score): n, mean, median, auc and p against the reference (G, RPT, MPS scales)
+cmp.summary      # (group, score): n, mean, median, auc (+ interval) and p against the reference (G, RPT, MPS scales)
 cmp.pairwise     # group vs group
 cmp.cross        # how do the samples of one group score on the MPS scale defined by the other?
 cmp.scores       # per sample (group label, G, RPT, MPS[<group>]) for plotting
@@ -210,6 +210,49 @@ mutation and an amplification, a hotspot and a rare variant, a known driver and 
 
 `cmp.pairwise` answers the complementary question (do A and B differ from each other?). A result that looks
 like a phenocopy in `cross` and shows no difference in `pairwise` is the strongest case.
+
+#### Where the AUC comes from
+
+The `auc` columns (and the Cliff's delta of `activity_vs_expression`, `delta = 2 * AUC - 1`) are the **probability that a
+random sample of one group has a higher value than a random sample of the other group** (ties count half):
+
+```
+AUC = P(X_group > X_other) + 0.5 * P(X_group = X_other)  =  U / (n_group * n_other)
+```
+
+`U` is the Mann-Whitney statistic, so the AUC and the Mann-Whitney `p` next to it are two views of the same test. It is also
+the area under the ROC curve that results when the value is used as a classifier "group vs. other" (0.5 = no separation,
+1 = every group sample above every reference sample, 0 = all below). It uses the *ranks* of the two distributions only: no
+density is estimated, there is no bandwidth, and it does not change under monotone transformations of the values.
+
+Where it appears in `compare_phenotypes`:
+
+| table | compares | on which values |
+| --- | --- | --- |
+| `summary` | group vs. reference | G, RPT and every group's MPS scale |
+| `pairwise` | group A vs. group B | the same scores |
+| `cross` | group B vs. reference | the MPS scale defined by group A (B was not used to build it) |
+
+How it differs from the MPS (relative likelihood):
+
+- The RL is a *local* value per sample, computed from the two kernel densities at that sample's value; it can be non-monotone
+  (a gene whose mutated samples are bimodal). The AUC is *one number per comparison* and asks only whether the group is shifted
+  up or down as a whole. A bimodal group with one mode on each side of the reference gives an AUC near 0.5 although the distributions
+  differ; the RL (and `frac_mutant_phenotype`) would show it. Look at both.
+- On G or RPT alone the AUC does not depend on `bw_adjust`. On the MPS scale it does, because the scale is built from the KDEs
+  and takes the larger |RL| of G and RPT (not a monotone function of either).
+- With few samples the AUC is uncertain, so every table has a bootstrap interval, `auc_low` / `auc_high` (95 %,
+  `alpha=0.05`). Each group and the reference are resampled separately (`n_boot=1000`, `seed=0`; `n_boot=0` switches it off
+  and gives NaN). For the MPS scales the scale itself is estimated again in every resample from the resampled group and
+  reference, so the uncertainty of the scale is included and the interval is not too narrow. The `p` is the Mann-Whitney
+  test of the original data, not corrected for multiple testing. Runtime: a few seconds for ~500 samples and two
+  groups (the cost grows with the number of groups, one MPS scale each).
+  For small groups (a rare fusion, n < 15) also show the individual points next to the AUC (`cmp.scores`).
+
+```python
+cmp = pr.compare_phenotypes(groups, "RHOA", vpres, rpt)            # intervals included
+cmp.cross[["n", "frac_mutant_phenotype", "auc", "auc_low", "auc_high", "p"]]
+```
 
 **What it is good for.** (1) *Functional annotation of non-canonical alterations*: does a fusion, a rare variant or a
 variant of unknown significance perturb the same protein as the established driver (the RHOA mutation vs.
