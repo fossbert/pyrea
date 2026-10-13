@@ -100,6 +100,51 @@ def test_plots_run(data):
     ax = pr.plot_mps_rank(mps.loc["GENE_A"], mut.loc["GENE_A"])
     assert ax.get_ylabel() == "MPS"
     assert pr.plot_rl_diagnostic("GENE_A", mut, G, R) is not None
+    assert pr.plot_rl_diagnostic("GENE_A", mut, G, R, bw_adjust=2) is not None
+
+
+def test_bw_adjust_default_is_unchanged(rng):
+    m, w = rng.normal(2, 1, 30), rng.normal(0, 1, 100)
+    x = np.linspace(-4, 6, 50)
+    np.testing.assert_array_equal(pr.relative_likelihood(x, m, w), pr.relative_likelihood(x, m, w, bw_adjust=1.0))
+
+
+def test_bw_adjust_smooths_and_stays_bounded(rng):
+    m, w = rng.normal(2, 0.5, 15), rng.normal(0, 1, 120)
+    x = np.sort(np.concatenate([m, w]))
+    narrow = pr.relative_likelihood(x, m, w, bw_adjust=1.0)
+    wide = pr.relative_likelihood(x, m, w, bw_adjust=2.5)
+    assert np.all(np.abs(wide) <= 1)
+    assert (np.abs(wide) > 0.99).mean() < (np.abs(narrow) > 0.99).mean()   # less saturation in the tails
+    assert np.abs(np.diff(wide)).max() < np.abs(np.diff(narrow)).max()     # smaller jumps along the trait
+    np.testing.assert_array_equal(np.sign(narrow[[0, -1]]), np.sign(wide[[0, -1]]))
+
+
+def test_bw_adjust_must_be_positive(rng):
+    with pytest.raises(ValueError, match="bw_adjust"):
+        pr.relative_likelihood([0.0, 1.0], rng.normal(size=5), rng.normal(size=5), bw_adjust=0)
+
+
+def test_bw_adjust_is_passed_through(data):
+    mut, G, R = data
+    base = pr.mutant_phenotype_score(mut, G, R)
+    wide = pr.mutant_phenotype_score(mut, G, R, bw_adjust=3)
+    assert not np.allclose(base.to_numpy(), wide.to_numpy())
+    _, mps = pr.mps_targets(mut.loc[["GENE_A"]], ["GENE_A"], G, R, associate=False, bw_adjust=3)
+    np.testing.assert_allclose(mps.iloc[0].to_numpy(), wide.loc["GENE_A"].to_numpy())
+    cmp = pr.compare_phenotypes({"A": mut.loc["GENE_A"]}, "GENE_A", G, R)
+    cmp3 = pr.compare_phenotypes({"A": mut.loc["GENE_A"]}, "GENE_A", G, R, bw_adjust=3)
+    assert not np.allclose(cmp.scores["MPS[A]"].to_numpy(), cmp3.scores["MPS[A]"].to_numpy(), equal_nan=True)
+
+
+def test_plot_mps_traits(data):
+    mut, G, R = data
+    fig = pr.plot_mps_traits("GENE_B", mut, G, R, bw_adjust=1.5)
+    assert len(fig.axes) == 3                      # G, RPT, MPS
+    assert fig.axes[2].get_title().startswith("MPS")
+    assert len(pr.plot_mps_traits("GENE_B", mut, G).axes) == 1
+    with pytest.raises(ValueError, match="carriers"):
+        pr.plot_mps_traits("GENE_B", mut, G, R, min_mut=1000)
 
 
 @viper

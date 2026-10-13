@@ -48,7 +48,15 @@ def _usable(v: np.ndarray) -> bool:
     return v.size >= 2 and np.ptp(v) > 0
 
 
-def relative_likelihood(x, mutant, wt) -> np.ndarray:
+def _kde(v: np.ndarray, bw_adjust: float = 1.0) -> gaussian_kde:
+    """Gaussian KDE with Scott's bandwidth times ``bw_adjust``."""
+    kde = gaussian_kde(v)
+    if bw_adjust != 1.0:
+        kde.set_bandwidth(kde.factor * bw_adjust)
+    return kde
+
+
+def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0) -> np.ndarray:
     """Relative likelihood of the mutant vs the WT phenotype at ``x``.
 
     Parameters
@@ -57,6 +65,11 @@ def relative_likelihood(x, mutant, wt) -> np.ndarray:
         Trait values at which RL is evaluated.
     mutant, wt : array-like
         Trait values of the mutant / WT samples, used to fit the KDEs.
+    bw_adjust : float
+        Multiplier of the kernel bandwidth of both KDEs (Scott's rule is the
+        default, 1.0). Values > 1 smooth the densities: the RL no longer
+        saturates at +-1 in the tails and the rank-sorted MPS looks smoother,
+        at the price of a lower resolution (fewer samples reach RL > 0.5).
 
     Returns
     -------
@@ -64,6 +77,8 @@ def relative_likelihood(x, mutant, wt) -> np.ndarray:
         RL in [-1, 1], positive = mutant-like. All NaN if either group has
         fewer than two distinct values (the KDE is then undefined).
     """
+    if not bw_adjust > 0:
+        raise ValueError("bw_adjust must be positive")
     x = np.asarray(x, dtype=float)
     mutant = np.asarray(mutant, dtype=float)
     wt = np.asarray(wt, dtype=float)
@@ -74,8 +89,8 @@ def relative_likelihood(x, mutant, wt) -> np.ndarray:
         return out
 
     xs = x.reshape(1, -1)
-    p_m = gaussian_kde(mutant).evaluate(xs)
-    p_wt = gaussian_kde(wt).evaluate(xs)
+    p_m = _kde(mutant, bw_adjust).evaluate(xs)
+    p_wt = _kde(wt, bw_adjust).evaluate(xs)
     den = p_m + p_wt
     ok = np.isfinite(x.ravel()) & (den > 0)
     res = np.full(den.shape, np.nan)
@@ -91,14 +106,14 @@ def _larger_abs(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _gene_rl(gene: str, carriers: np.ndarray, wt: np.ndarray, traits: Sequence[pd.DataFrame],
-             samples: pd.Index) -> np.ndarray:
+             samples: pd.Index, bw_adjust: float = 1.0) -> np.ndarray:
     """RL of one gene over all ``samples``, combining the traits by larger |RL|."""
     rl = np.full(len(samples), np.nan)
     for tr in traits:
         if gene not in tr.index:
             continue
         v = tr.loc[gene, samples].to_numpy(dtype=float)
-        rl = _larger_abs(rl, relative_likelihood(v, v[carriers], v[wt]))
+        rl = _larger_abs(rl, relative_likelihood(v, v[carriers], v[wt], bw_adjust))
     return rl
 
 
@@ -114,7 +129,8 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
                            rpt: Optional[pd.DataFrame] = None,
                            min_mut: int = 10,
                            min_wt: int = 10,
-                           key: Optional[Mapping[str, str]] = None) -> pd.DataFrame:
+                           key: Optional[Mapping[str, str]] = None,
+                           bw_adjust: float = 1.0) -> pd.DataFrame:
     """Mutant phenotype score for each row of ``mutations``.
 
     Parameters
@@ -139,6 +155,8 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
         'CLDN18-ARHGAP6/26') are scored on the activity of the mapped gene.
         Rows not in the mapping are used as they are. The result is indexed
         by the row ids of ``mutations``.
+    bw_adjust : float
+        Multiplier of the KDE bandwidth (see :func:`relative_likelihood`); 1.0 = Scott's rule.
 
     Returns
     -------
@@ -158,7 +176,7 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
         m, wt = row == 1, row == 0  # NaN = not profiled: neither mutant nor WT
         if m.sum() < min_mut or wt.sum() < min_wt:
             continue
-        rows[rid] = _gene_rl(gene, m, wt, traits, samples)
+        rows[rid] = _gene_rl(gene, m, wt, traits, samples, bw_adjust)
     return pd.DataFrame.from_dict(rows, orient="index", columns=samples)
 
 
@@ -251,7 +269,8 @@ def locus_specific_mps(variants: pd.DataFrame,
                        min_samples: int = 2,
                        min_mps: int = 10,
                        min_wt: int = 10,
-                       exclude_other_variants: bool = True):
+                       exclude_other_variants: bool = True,
+                       bw_adjust: float = 1.0):
     """Locus-specific analysis of individual variants (Alvarez et al., Fig. 6).
 
     Every variant (e.g. ``KRAS:G12D``) is compared with the *wild-type* samples of its gene:
@@ -296,6 +315,8 @@ def locus_specific_mps(variants: pd.DataFrame,
         Minimum WT samples (gene state 0) for the per-variant MPS.
     exclude_other_variants : bool
         Exclude carriers of other variants of the gene from the association test.
+    bw_adjust : float
+        Multiplier of the KDE bandwidth of the MPS (see :func:`relative_likelihood`).
 
     Returns
     -------
@@ -354,7 +375,7 @@ def locus_specific_mps(variants: pd.DataFrame,
         wt = (state.loc[gene, samples] == 0).to_numpy()
         if wt.sum() < min_wt:
             continue
-        rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples)
+        rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples, bw_adjust)
     mps = pd.DataFrame.from_dict(rows, orient="index", columns=samples)
     return assoc, mps
 
@@ -367,7 +388,8 @@ def mps_targets(mutations: pd.DataFrame,
                 associate: bool = True,
                 min_mut: int = 10,
                 min_wt: int = 10,
-                lr: float = DEFAULT_LR):
+                lr: float = DEFAULT_LR,
+                bw_adjust: float = 1.0):
     """Test mutation rows (e.g. a gene fusion) against the activity of chosen target proteins.
 
     Typical use: a fusion or hotspot that is not itself a protein, tested for its effect on the
@@ -390,6 +412,8 @@ def mps_targets(mutations: pd.DataFrame,
         As in :func:`mutant_phenotype_score`; pairs below the thresholds get no MPS (NaN).
     lr : float
         Likelihood ratio defining the mutant / WT phenotype (default 3, RL > 0.5).
+    bw_adjust : float
+        Multiplier of the KDE bandwidth of the MPS (see :func:`relative_likelihood`).
 
     Returns
     -------
@@ -425,7 +449,8 @@ def mps_targets(mutations: pd.DataFrame,
                 rows.append(rec)
                 continue
             one = mutations.loc[[rid]]
-            mps = mutant_phenotype_score(one, activity, rpt, min_mut=min_mut, min_wt=min_wt, key={rid: tgt})
+            mps = mutant_phenotype_score(one, activity, rpt, min_mut=min_mut, min_wt=min_wt, key={rid: tgt},
+                                        bw_adjust=bw_adjust)
             if len(mps):
                 v = mps.iloc[0].to_numpy()
                 mps_rows[(rid, tgt)] = mps.iloc[0]

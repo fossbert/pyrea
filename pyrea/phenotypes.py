@@ -75,7 +75,8 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
                        rpt: Optional[pd.DataFrame] = None,
                        reference: str = "neither",
                        lr: float = DEFAULT_LR,
-                       min_group: int = 3) -> PhenotypeComparison:
+                       min_group: int = 3,
+                       bw_adjust: float = 1.0) -> PhenotypeComparison:
     """Compare alteration groups on the activity of ``target``.
 
     Samples are assigned to the groups, and only to one: a sample in several groups is labelled
@@ -104,6 +105,8 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
     min_group : int
         Groups with fewer samples get no MPS scale (NaN); a warning names them (``n=0``: nobody carries
         the alteration, e.g. no amplification events of that gene in the export).
+    bw_adjust : float
+        Multiplier of the KDE bandwidth of the MPS scales (see :func:`pyrea.relative_likelihood`).
 
     Returns
     -------
@@ -162,7 +165,7 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
         if m.sum() >= min_group:
             for name in traits:
                 v = scores[name].to_numpy()
-                rl = _larger_abs(rl, relative_likelihood(v, v[m.to_numpy()], v[refv]))
+                rl = _larger_abs(rl, relative_likelihood(v, v[m.to_numpy()], v[refv], bw_adjust))
         scores[f"MPS[{k}]"] = rl
 
     cols = [c for c in scores.columns if c != "group"]

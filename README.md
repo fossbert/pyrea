@@ -35,8 +35,8 @@ BiocManager::install("viper")
 | `pyrea.mps` | Mutant phenotype score (Alvarez et al. 2016): `relative_likelihood`, `mutant_phenotype_score`, `classify_phenotype`, `mutation_association`, `locus_specific_mps`. Only the association tests need R |
 | `pyrea.rbackend.viper` | `viper_activity` -- `viper::viper` (mad/rank/... signatures) for protein activity, as DataFrame (needs R) |
 | `pyrea.rbackend.regulon` | `read_regulon_rds` -- ARACNe/viper regulon from `.rds` to long format (needs R) |
-| `pyrea.rpt` | `viper_rpt` -- residual post-translational activity, pure Python, matches `viper::viperRPT` |
-| `pyrea.mps_plot` | `plot_mps_rank`, `plot_rl_diagnostic` |
+| `pyrea.rpt` | `viper_rpt` -- residual post-translational activity (`rank`, `lineal`, `spline`), pure Python, matches `viper::viperRPT` |
+| `pyrea.mps_plot` | `plot_mps_rank`, `plot_mps_traits`, `plot_rl_diagnostic` |
 
 ```python
 reg = pr.read_regulon_rds("FullReg.rds")
@@ -79,6 +79,43 @@ rpt = pr.viper_rpt(vpres, emat)                   # residual post-translational 
 mps = pr.mutant_phenotype_score(mutations, vpres, rpt)       # genes x samples, in [-1, 1]
 pr.classify_phenotype(mps.loc["ERBB2"])                       # mutant / wt / intermediate (LR > 3, RL > 0.5)
 pr.plot_mps_rank(mps.loc["ERBB2"], mutations.loc["ERBB2"])   # samples ranked by MPS, carriers marked
+```
+
+#### RPT methods
+
+`viper_rpt(vpres, emat, method=...)` removes the part of a protein's activity that follows the expression of its
+gene. The three methods of `viper::viperRPT` are available (no R needed); sample names must be unique (collapse
+duplicates first, e.g. `emat.T.groupby(level=0).mean().T`).
+
+| `method` | model | note |
+|---|---|---|
+| `"rank"` (default) | linear regression of the within-gene ranks | as in the paper; robust to outliers |
+| `"lineal"` | linear regression of the raw values | `viperRPT`'s linear option |
+| `"spline"` | cubic smoothing spline (`spar=1.2`, a knot per distinct value) | removes non-linear dependence; R's default; ~15 s for 5000 proteins |
+
+On STAD/EAC (ERBB2 amplification, MYC, ...) and GBM (EGFR, PTEN, ...) the RPT of the three methods correlates with
+Spearman ~0.94 (median over proteins), the MPS with ~0.75-0.9. Strong signals are stable (EGFR in GBM: 68 / 67 / 67 %
+of the carriers reach the mutant phenotype with rank / lineal / spline), weaker ones shift: ERBB2 amplification in
+STAD gives 55 / 44 / 40 %. The reason is the combination step "larger |RL| of G and RPT": where RPT wins the MPS can
+jump between the two curves, and how often that happens depends on the RPT method (`lineal` most often). Use the
+default for results comparable with the paper and check others with `plot_mps_traits` (below).
+
+#### Smoother or more transparent rank plots
+
+The rank-sorted MPS is a sigmoid for a gene with a clear, one-sided effect (EGFR in GBM, Alvarez et al., Fig. 5) but can
+show plateaus and steps otherwise. Two things cause it:
+
+- *saturation*: with Scott's bandwidth the RL reaches +-1 in the tails of the densities (about 5 % of the samples
+  for ERBB2 / EGFR). `bw_adjust` multiplies the kernel bandwidth (`bw_adjust=1.5-2` removes the saturation);
+  larger values flatten the curve and lower the share of samples that reach RL > 0.5. It is accepted by
+  `relative_likelihood`, `mutant_phenotype_score`, `locus_specific_mps`, `mps_targets`, `compare_phenotypes` and
+  `plot_rl_diagnostic`; the default 1.0 reproduces the previous results.
+- *steps between G and RPT*: `plot_mps_traits` draws the RL of G, of RPT and the combined MPS side by side, so
+  the trait that causes a jump is visible.
+
+```python
+mps = pr.mutant_phenotype_score(mutations, vpres, rpt, bw_adjust=1.5)
+fig = pr.plot_mps_traits("EGFR", mutations, vpres, rpt, bw_adjust=1.5)   # panels: G, RPT, MPS
 ```
 
 Rows that are not genes (e.g. a gene fusion) are scored on the activity of one or more chosen
