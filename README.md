@@ -98,7 +98,7 @@ import cbiokit as cbk
 
 ex = cbk.read_alteration_export("alterations_across_samples.tsv")
 variants = cbk.alteration_matrix(ex, types=("MUT",), level="event",
-                                 drivers_only=False, by="PATIENT_ID")[emat.columns]
+                                 by="PATIENT_ID")[emat.columns]          # all variants, VUS included
 assoc, mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat,
                                    min_samples=3, min_mps=10)
 
@@ -116,7 +116,7 @@ Things to know:
   other samples).
 - **Pass all variants of a gene.** Carriers of a variant you filtered out beforehand would look
   like wild type. Filter with `min_samples` / `min_mps`, not before.
-- **Include variants of unknown significance** (`drivers_only=False` in cbiokit); the paper uses
+- **Include variants of unknown significance** (the default of `cbiokit.alteration_matrix`; `ex.drivers()` restricts to drivers); the paper uses
   all non-silent mutations, not only annotated drivers.
 - Few carriers mean noisy tests: `min_samples=2` (paper) yields many p-values, and `p_min` (the
   smaller of G and RPT) is not corrected for multiple testing. The MPS itself needs at least

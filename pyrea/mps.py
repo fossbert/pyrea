@@ -313,8 +313,8 @@ def locus_specific_mps(variants: pd.DataFrame,
         import cbiokit as cbk, pyrea as pr
 
         ex = cbk.read_alteration_export("alterations_across_samples.tsv")
-        variants = cbk.alteration_matrix(ex, types=("MUT",), level="event", drivers_only=False,
-                                         by="PATIENT_ID")[emat.columns]
+        variants = cbk.alteration_matrix(ex, types=("MUT",), level="event",
+                                         by="PATIENT_ID")[emat.columns]   # all variants (VUS included)
         assoc, mps = pr.locus_specific_mps(variants, vpres, rpt, expression=emat)
 
         assoc.loc[assoc.index.str.startswith("TP53:")].sort_values("p_min").head()
@@ -322,7 +322,7 @@ def locus_specific_mps(variants: pd.DataFrame,
 
     Compare with the gene-level view of the same data, where all variants are pooled::
 
-        gene = cbk.alteration_matrix(ex, types=("MUT",), drivers_only=False, by="PATIENT_ID")[emat.columns]
+        gene = cbk.alteration_matrix(ex, types=("MUT",), by="PATIENT_ID")[emat.columns]
         pr.mutant_phenotype_score(gene, vpres, rpt)
     """
     genes = pd.Series(variants.index.str.split(sep, n=1).str[0], index=variants.index)
