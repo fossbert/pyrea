@@ -14,9 +14,10 @@ from typing import Mapping, Optional
 
 import numpy as np
 import pandas as pd
+from scipy.special import ndtr
 from scipy.stats import mannwhitneyu, rankdata
 
-from .mps import DEFAULT_LR, _larger_abs, lr_to_rl, relative_likelihood
+from .mps import DEFAULT_LR, DEFAULT_RL_METHOD, RL_METHODS, _larger_abs, lr_to_rl, relative_likelihood
 
 __all__ = ["compare_phenotypes", "PhenotypeComparison"]
 
@@ -108,19 +109,29 @@ def _auc_rows(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return out
 
 
-def _rl_rows(x: np.ndarray, m: np.ndarray, w: np.ndarray, bw_adjust: float) -> np.ndarray:
+def _rl_rows(x: np.ndarray, m: np.ndarray, w: np.ndarray, bw_adjust: float,
+             method: str = DEFAULT_RL_METHOD) -> np.ndarray:
     """Row-wise :func:`pyrea.relative_likelihood`: ``x`` (B x k) scored on the KDEs of ``m`` / ``w`` (B x n).
 
-    Same estimator as ``scipy.stats.gaussian_kde`` (Scott's bandwidth times ``bw_adjust``), evaluated for
+    Same estimators as ``scipy.stats.gaussian_kde`` (Scott's bandwidth times ``bw_adjust``), evaluated for
     all resamples at once. Rows whose groups have fewer than two distinct values are NaN."""
-    def dens(d):
+    def band(d):
         h = d.std(axis=1, ddof=1) * d.shape[1] ** (-0.2) * bw_adjust
         usable = (np.ptp(d, axis=1) > 0) & (d.shape[1] >= 2)
-        hs = np.where(usable, h, 1.0)[:, None]
-        z = (x[:, :, None] - d[:, None, :]) / hs[:, :, None]
-        return np.exp(-0.5 * z * z).mean(axis=2) / (hs * np.sqrt(2 * np.pi)), usable
-    pm, um = dens(m)
-    pw, uw = dens(w)
+        return np.where(usable, h, 1.0)[:, None], usable
+
+    hm, um = band(m)
+    hw, uw = band(w)
+    if method == "density":
+        def dens(d, h):
+            z = (x[:, :, None] - d[:, None, :]) / h[:, :, None]
+            return np.exp(-0.5 * z * z).mean(axis=2) / (h * np.sqrt(2 * np.pi))
+        pm, pw = dens(m, hm), dens(w, hw)
+    else:
+        o = np.where(m.mean(axis=1) >= w.mean(axis=1), 1.0, -1.0)[:, None]
+        xo, mo, wo = o * x, o * m, o * w
+        pm = ndtr((xo[:, :, None] - mo[:, None, :]) / hm[:, :, None]).mean(axis=2)
+        pw = 1.0 - ndtr((xo[:, :, None] - wo[:, None, :]) / hw[:, :, None]).mean(axis=2)
     den = pm + pw
     with np.errstate(invalid="ignore", divide="ignore"):
         rl = np.where(den > 0, (pm - pw) / den, np.nan)
@@ -128,7 +139,8 @@ def _rl_rows(x: np.ndarray, m: np.ndarray, w: np.ndarray, bw_adjust: float) -> n
     return rl
 
 
-def _bootstrap_auc(scores, exclusive, refv, names, traits, min_group, n_boot, alpha, seed, bw_adjust):
+def _bootstrap_auc(scores, exclusive, refv, names, traits, min_group, n_boot, alpha, seed, bw_adjust,
+                   method=DEFAULT_RL_METHOD):
     """Bootstrap intervals for all AUCs of :func:`compare_phenotypes`.
 
     Every group and the reference are resampled separately. The MPS scale of a group is
@@ -182,7 +194,7 @@ def _bootstrap_auc(scores, exclusive, refv, names, traits, min_group, n_boot, al
             rl = np.full(cat.shape, np.nan)
             for t in traits:
                 v = vals[t]
-                rl = _larger_abs(rl, _rl_rows(v[cat], v[idx[k]], v[idx[_REF]], bw_adjust))
+                rl = _larger_abs(rl, _rl_rows(v[cat], v[idx[k]], v[idx[_REF]], bw_adjust, method))
             xs = dict(zip(order, np.split(rl, cuts, axis=1)))
             for g in names:
                 summ[(g, f"MPS[{k}]")].append(_auc_rows(xs[g], xs[_REF]))
@@ -201,6 +213,7 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
                        lr: float = DEFAULT_LR,
                        min_group: int = 3,
                        bw_adjust: float = 1.0,
+                       method: str = DEFAULT_RL_METHOD,
                        n_boot: int = 1000,
                        alpha: float = 0.05,
                        seed: int = 0) -> PhenotypeComparison:
@@ -232,8 +245,8 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
     min_group : int
         Groups with fewer samples get no MPS scale (NaN); a warning names them (``n=0``: nobody carries
         the alteration, e.g. no amplification events of that gene in the export).
-    bw_adjust : float
-        Multiplier of the KDE bandwidth of the MPS scales (see :func:`pyrea.relative_likelihood`).
+    bw_adjust, method :
+        Bandwidth multiplier and RL definition of the MPS scales (see :func:`pyrea.relative_likelihood`).
     n_boot : int
         Bootstrap resamples for the AUC intervals (``auc_low`` / ``auc_high``); 0 switches them
         off (the columns are then NaN). Every group and the reference are resampled separately;
@@ -258,6 +271,8 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
         cmp.scores.boxplot("G", by="group")
     """
 
+    if method not in RL_METHODS:
+        raise ValueError("method must be one of %s" % ", ".join(repr(m) for m in RL_METHODS))
     if target not in activity.index:
         raise ValueError(f"Target {target!r} has no activity (not in the regulon)")
     traits = {"G": activity}
@@ -300,7 +315,7 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
         if m.sum() >= min_group:
             for name in traits:
                 v = scores[name].to_numpy()
-                rl = _larger_abs(rl, relative_likelihood(v, v[m.to_numpy()], v[refv], bw_adjust))
+                rl = _larger_abs(rl, relative_likelihood(v, v[m.to_numpy()], v[refv], bw_adjust, method))
         scores[f"MPS[{k}]"] = rl
 
     cols = [c for c in scores.columns if c != "group"]
@@ -317,7 +332,7 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
                             "auc": auc, "p": p}
     if n_boot > 0:
         b_summ, b_pair, b_cross = _bootstrap_auc(scores, exclusive, refv, names, list(traits), min_group,
-                                                 n_boot, alpha, seed, bw_adjust)
+                                                 n_boot, alpha, seed, bw_adjust, method)
     else:
         b_summ, b_pair, b_cross = {}, {}, {}
     nan2 = (np.nan, np.nan)

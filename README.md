@@ -101,22 +101,75 @@ STAD gives 55 / 44 / 40 %. The reason is the combination step "larger |RL| of G 
 jump between the two curves, and how often that happens depends on the RPT method (`lineal` most often). Use the
 default for results comparable with the paper and check others with `plot_mps_traits` (below).
 
+#### How the relative likelihood is defined (`method`)
+
+`RL(x) = (p_M(x) - p_WT(x)) / (p_M(x) + p_WT(x))` needs a probability `p` of the mutant and the WT phenotype at the
+trait value `x`. Two definitions are implemented; both start from Gaussian kernel estimates (Scott's bandwidth) of the
+mutant and WT samples:
+
+| `method` | `p_M`, `p_WT` | behaviour |
+| --- | --- | --- |
+| `"density"` (default) | the kernel densities at `x` | `RL = (LR - 1) / (LR + 1)` with `LR = p_M / p_WT`; local, can be non-monotone (bimodal mutants), shows plateaus, steps and saturation at +-1 |
+| `"cdf"` | cumulative distribution functions: after orienting the trait so that the mutants are the higher group, `p_M = F_M(x)` (mutants at or below `x`) and `p_WT = 1 - F_WT(x)` (WT at or above `x`) | RL is monotone in the trait and runs smoothly from -1 to +1 (sigmoid rank plot); exactly antisymmetric when the groups are swapped; more sensitive and less specific |
+
+**What `RL > 0.5` means depends on the method.**
+
+- `"density"`: `RL > 0.5` is `LR > 3`, i.e. at this trait value the sample is **three times as likely to come from the mutant as
+  from the WT distribution** (`RL = 2 P(M | x) - 1` for equal class priors, so `P(M | x) > 0.75`). This is the reading used by
+  Alvarez et al. for the MPS-defined mutant and WT phenotypes: in the Results on Fig. 5a, samples with MPS >= 0.5 are described
+  as "threefold more likely to have mutated activity" and those with MPS <= -0.5 as "threefold more likely to have WT activity".
+- `"cdf"`: `RL > 0.5` means `F_M(x) / (1 - F_WT(x)) > 3`, a ratio of *tail probabilities* (mutants at or below `x` against WT at or above
+  `x`). **The likelihood-ratio reading does not carry over**: at the threshold the density ratio is smaller than 3. For
+  normal groups (unit variance, equal priors) whose means are 1, 2 or 3 SD apart:
+
+  | mean difference | `x` where `RL = 0.5` (`density` / `cdf`) | density ratio there (`density` / `cdf`) | `P(M \| x)` there (`density` / `cdf`) |
+  | --- | --- | --- | --- |
+  | 1 SD | 1.60 / 0.98 | 3.00 / 1.61 | 0.75 / 0.62 |
+  | 2 SD | 1.55 / 1.36 | 3.00 / 2.05 | 0.75 / 0.67 |
+  | 3 SD | 1.87 / 1.78 | 3.00 / 2.34 | 0.75 / 0.70 |
+
+  The `cdf` threshold lies lower on the trait, so more WT samples reach `RL > 0.5` (1 SD: 16 % instead of 5 % of the WT samples;
+  24 % instead of 17 % of the calls are WT). The difference shrinks for well separated groups. Do not describe `cdf` values as
+  "three times as likely"; say that the MPS is a ratio of tail probabilities (`RL > 0.5`: ratio above 3).
+
+The Methods of [Alvarez et al. 2016](https://doi.org/10.1038/ng.3593) say that the densities are estimated with a Gaussian
+kernel and that "the probabilities, computed by the derived cumulative distribution functions" enter the relative
+likelihood, but give no formula (the supplement shows density histograms and rank plots and has none either). `"cdf"`
+follows the construction that Mariano Alvarez uses for the mode of regulation in the `viper` package (`viper::TFscore`:
+signed ratios of `pnorm` tail probabilities of the mixture components). **It is an interpretation, not a verified
+reproduction**; state the `method` when reporting results, and consider `"density"` as a sensitivity analysis (or the
+primary analysis when the likelihood-ratio statement is needed).
+
+What changes with the definition (TCGA, `RL > 0.5`): EGFR in GBM, mutated 68 % vs. WT 11 % (`"density"`) and 67 % vs. 21 %
+(`"cdf"`); ERBB2 amplification in STAD, 55 % vs. 5 % and 86 % vs. 13 %. The ranking of samples within one trait is
+the same, so the AUC of a single trait does not change; what changes is the calibration of the threshold. Two
+consequences:
+
+- With `"cdf"` any value beyond the mutant range scores as mutant-like (RL -> 1), because the tail probabilities are
+  cumulative. A group that is *stronger* than the mutants therefore looks like them (see the asymmetry in the
+  phenocopy section); with `"density"` such a group lies outside the mutant density and scores low.
+- `bw_adjust` mainly matters for `"density"`; for `"cdf"` the CDFs are already smooth.
+
 #### Smoother or more transparent rank plots
 
-The rank-sorted MPS is a sigmoid for a gene with a clear, one-sided effect (EGFR in GBM, Alvarez et al., Fig. 5) but can
-show plateaus and steps otherwise. Two things cause it:
+The rank-sorted MPS is a sigmoid for a gene with a clear, one-sided effect (EGFR in GBM, Alvarez et al., Fig. 5). With
+`method="cdf"` it is smooth in the single traits for every gene; with `method="density"` (default) it can show plateaus
+and steps. What remains in both:
 
-- *saturation*: with Scott's bandwidth the RL reaches +-1 in the tails of the densities (about 5 % of the samples
-  for ERBB2 / EGFR). `bw_adjust` multiplies the kernel bandwidth (`bw_adjust=1.5-2` removes the saturation);
+- *saturation* (`"density"`): with Scott's bandwidth the RL reaches +-1 in the tails of the densities (about 5 % of the
+  samples for ERBB2 / EGFR). `bw_adjust` multiplies the kernel bandwidth (`bw_adjust=1.5-2` removes the saturation);
   larger values flatten the curve and lower the share of samples that reach RL > 0.5. It is accepted by
   `relative_likelihood`, `mutant_phenotype_score`, `locus_specific_mps`, `mps_targets`, `compare_phenotypes` and
-  `plot_rl_diagnostic`; the default 1.0 reproduces the previous results.
-- *steps between G and RPT*: `plot_mps_traits` draws the RL of G, of RPT and the combined MPS side by side, so
-  the trait that causes a jump is visible.
+  `plot_rl_diagnostic`; the default 1.0 is Scott's rule.
+- *steps between G and RPT*: the MPS takes the larger |RL| of the two traits, so it can jump where they disagree.
+  `plot_mps_traits` draws the RL of G, of RPT and the combined MPS side by side, so the trait that causes a jump is
+  visible.
 
 ```python
-mps = pr.mutant_phenotype_score(mutations, vpres, rpt, bw_adjust=1.5)
-fig = pr.plot_mps_traits("EGFR", mutations, vpres, rpt, bw_adjust=1.5)   # panels: G, RPT, MPS
+mps = pr.mutant_phenotype_score(mutations, vpres, rpt)                          # method="density" (LR > 3)
+mps_c = pr.mutant_phenotype_score(mutations, vpres, rpt, method="cdf")          # tail probabilities, smoother
+mps_s = pr.mutant_phenotype_score(mutations, vpres, rpt, bw_adjust=1.5)         # density, smoothed kernel
+fig = pr.plot_mps_traits("EGFR", mutations, vpres, rpt)                          # panels: G, RPT, MPS
 ```
 
 Rows that are not genes (e.g. a gene fusion) are scored on the activity of one or more chosen
@@ -192,7 +245,7 @@ mutation and an amplification, a hotspot and a rare variant, a known driver and 
 
 1. *Scale of A.* From the activity of the target in the A samples and in the reference (samples with none of the
    alterations) the relative likelihood `RL(x) = (p_A(x) - p_ref(x)) / (p_A(x) + p_ref(x))` is estimated for every
-   activity value (G and RPT, the one with the larger |RL| counts). RL > 0 means: more like A than like the
+   activity value (G and RPT, the one with the larger |RL| counts; `p` from the CDFs or the densities, see `method`). RL > 0 means: more like A than like the
    reference; RL > 0.5 is a likelihood ratio above 3 (the "mutant phenotype" of Alvarez et al.).
 2. *Score B on it.* All samples of B receive their RL on the scale of A. B did not take part in estimating that scale,
    so a high score is evidence and not circular. Reported per `(scale, group)`: `n`, `mean_rl`,
@@ -207,6 +260,15 @@ mutation and an amplification, a hotspot and a rare variant, a known driver and 
 | B high on A's scale, A not on B's | asymmetric: B resembles A, but A is weaker or more heterogeneous than B (e.g. amplification vs. mutation: the amplification looks "like the mutation, only stronger") |
 | B not above the reference on A's scale | no phenocopy: B does something else, or nothing, to this protein |
 | `in_sample` row low | A itself has no clear phenotype on this protein: nothing to copy |
+
+**The asymmetry depends on `method`.** With `method="cdf"` the scale is monotone: every sample beyond the range
+of A scores as A-like, so a stronger group (e.g. an amplification against a mutation) scores high on A's scale by
+construction, while A (weaker) scores lower on the scale of the stronger group. With `method="density"` a group outside A's
+density scores low, which can also be an overshoot and not a different state. Example, ERBB2 in STAD (amplification vs.
+mutation, `cdf` / `density` (default)): the amplified samples on the mutation scale `frac_mutant_phenotype` 0.71 / 0.00, the
+mutated samples on the amplification scale 0.19 / 0.04. Report the `method`, and treat "B high on A's scale" as
+"B is at least as extreme as A in the same direction", not as proof of the same state; `cmp.pairwise` (do A and B differ?)
+and the raw `cmp.scores` show whether B simply exceeds A.
 
 `cmp.pairwise` answers the complementary question (do A and B differ from each other?). A result that looks
 like a phenocopy in `cross` and shows no difference in `pairwise` is the strongest case.
@@ -235,18 +297,19 @@ Where it appears in `compare_phenotypes`:
 
 How it differs from the MPS (relative likelihood):
 
-- The RL is a *local* value per sample, computed from the two kernel densities at that sample's value; it can be non-monotone
-  (a gene whose mutated samples are bimodal). The AUC is *one number per comparison* and asks only whether the group is shifted
-  up or down as a whole. A bimodal group with one mode on each side of the reference gives an AUC near 0.5 although the distributions
-  differ; the RL (and `frac_mutant_phenotype`) would show it. Look at both.
-- On G or RPT alone the AUC does not depend on `bw_adjust`. On the MPS scale it does, because the scale is built from the KDEs
-  and takes the larger |RL| of G and RPT (not a monotone function of either).
+- The RL is a value per sample derived from the kernel estimates of the two groups. With `method="density"` it is local and can
+  be non-monotone (a gene whose mutated samples are bimodal); with `method="cdf"` it is a monotone function of the trait. The AUC
+  is *one number per comparison* and asks only whether the group is shifted up or down as a whole. A bimodal group with one mode
+  on each side of the reference gives an AUC near 0.5 although the distributions differ; the density RL (and
+  `frac_mutant_phenotype`) would show it. Look at both.
+- On G or RPT alone the AUC does not depend on `bw_adjust` or `method`. On the MPS scale it does, because the scale is built from
+  the kernel estimates and takes the larger |RL| of G and RPT (not a monotone function of either).
 - With few samples the AUC is uncertain, so every table has a bootstrap interval, `auc_low` / `auc_high` (95 %,
   `alpha=0.05`). Each group and the reference are resampled separately (`n_boot=1000`, `seed=0`; `n_boot=0` switches it off
   and gives NaN). For the MPS scales the scale itself is estimated again in every resample from the resampled group and
   reference, so the uncertainty of the scale is included and the interval is not too narrow. The `p` is the Mann-Whitney
-  test of the original data, not corrected for multiple testing. Runtime: a few seconds for ~500 samples and two
-  groups (the cost grows with the number of groups, one MPS scale each).
+  test of the original data, not corrected for multiple testing. Runtime: about 10-25 s for ~500 samples and two
+  groups with 1000 resamples (more groups = one more MPS scale each; use `n_boot=200` while exploring).
   For small groups (a rare fusion, n < 15) also show the individual points next to the AUC (`cmp.scores`).
 
 ```python

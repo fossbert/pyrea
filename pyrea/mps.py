@@ -7,10 +7,12 @@ post-translational activity "RPT")::
 
     RL(x) = (p_M(x) - p_WT(x)) / (p_M(x) + p_WT(x))
 
-``p_M`` / ``p_WT`` are Gaussian-kernel density estimates of the mutant and
-WT samples. The MPS of a sample is the RL of the trait with the larger
-absolute value. A likelihood ratio ``p_M / p_WT > 3`` corresponds to
-``RL > 0.5`` (see :func:`lr_to_rl`).
+with ``p_M`` / ``p_WT`` derived from Gaussian-kernel estimates of the mutant and WT samples. The
+MPS of a sample is the RL of the trait with the larger absolute value. A likelihood ratio
+``p_M / p_WT > 3`` corresponds to ``RL > 0.5`` (see :func:`lr_to_rl`). Two definitions of the
+probabilities are available (``method``, see :func:`relative_likelihood`): from the kernel densities
+(``"density"``, default; ``RL > 0.5`` is a likelihood ratio above 3) or from the cumulative distribution
+functions (``"cdf"``; smooth sigmoid in the rank plot, but ``RL > 0.5`` is no likelihood ratio).
 
 Everything except :func:`mutation_association` is pure numpy/scipy;
 the association test uses :func:`pyrea.aREA` and therefore needs R.
@@ -23,6 +25,7 @@ from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
+from scipy.special import ndtr
 from scipy.stats import gaussian_kde, norm
 
 __all__ = [
@@ -36,6 +39,8 @@ __all__ = [
 ]
 
 DEFAULT_LR = 3.0
+RL_METHODS = ("density", "cdf")
+DEFAULT_RL_METHOD = "density"
 
 
 def lr_to_rl(lr: float = DEFAULT_LR) -> float:
@@ -56,7 +61,13 @@ def _kde(v: np.ndarray, bw_adjust: float = 1.0) -> gaussian_kde:
     return kde
 
 
-def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0) -> np.ndarray:
+def _kde_cdf(v: np.ndarray, bw_adjust: float = 1.0):
+    """CDF of the Gaussian KDE of ``v`` (same bandwidth as :func:`_kde`) as a function of x."""
+    h = float(np.sqrt(_kde(v, bw_adjust).covariance[0, 0]))
+    return lambda x: ndtr((np.asarray(x, dtype=float)[:, None] - v[None, :]) / h).mean(axis=1)
+
+
+def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0, method: str = DEFAULT_RL_METHOD) -> np.ndarray:
     """Relative likelihood of the mutant vs the WT phenotype at ``x``.
 
     Parameters
@@ -67,9 +78,27 @@ def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0) -> np.ndarray:
         Trait values of the mutant / WT samples, used to fit the KDEs.
     bw_adjust : float
         Multiplier of the kernel bandwidth of both KDEs (Scott's rule is the
-        default, 1.0). Values > 1 smooth the densities: the RL no longer
-        saturates at +-1 in the tails and the rank-sorted MPS looks smoother,
-        at the price of a lower resolution (fewer samples reach RL > 0.5).
+        default, 1.0). Larger values smooth the estimates (less saturation at +-1
+        with ``method="density"``) at the price of a lower resolution.
+    method : {"density", "cdf"}
+        How the probabilities of the two phenotypes are derived from the KDEs.
+
+        ``"density"`` (default): ``p_M`` and ``p_WT`` are the KDE densities at ``x``. Then
+        ``RL = (LR - 1) / (LR + 1)`` with the likelihood ratio ``LR = p_M / p_WT``, i.e. ``RL = 2 P(M | x) - 1``
+        for equal class priors, and **``RL > 0.5`` means ``LR > 3``: the sample is three times as likely to
+        come from the mutant as from the WT distribution** (``P(M | x) > 0.75``). RL is local and can be
+        non-monotone in ``x``; the rank-sorted MPS shows plateaus, steps and saturation at +-1.
+
+        ``"cdf"``: the probabilities come from the cumulative distribution functions of the KDEs, as in
+        the ``viper::TFscore`` model of the mode of regulation. After orienting the trait so that the mutant
+        mean is the higher one, ``p_M = F_M(x)`` (mutants at or below ``x``) and ``p_WT = 1 - F_WT(x)``
+        (WT samples at or above ``x``). RL is monotone in the trait, runs smoothly from -1 to +1 and is
+        exactly antisymmetric in the two groups. **The likelihood-ratio reading does not carry over:**
+        ``RL > 0.5`` means ``F_M(x) / (1 - F_WT(x)) > 3``, a ratio of tail probabilities. At that threshold
+        the density ratio is smaller than 3 (about 1.6-2.3 for normal groups one to three SD apart, so
+        ``P(M | x)`` of about 0.6-0.7), and more WT samples reach RL > 0.5 than with ``"density"``.
+        This follows the wording of the Methods of Alvarez et al. 2016 ("probabilities computed by the
+        cumulative distribution functions"); the paper does not give the formula, so it is an interpretation.
 
     Returns
     -------
@@ -79,6 +108,8 @@ def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0) -> np.ndarray:
     """
     if not bw_adjust > 0:
         raise ValueError("bw_adjust must be positive")
+    if method not in RL_METHODS:
+        raise ValueError("method must be one of %s" % ", ".join(repr(m) for m in RL_METHODS))
     x = np.asarray(x, dtype=float)
     mutant = np.asarray(mutant, dtype=float)
     wt = np.asarray(wt, dtype=float)
@@ -88,9 +119,19 @@ def relative_likelihood(x, mutant, wt, bw_adjust: float = 1.0) -> np.ndarray:
     if not (_usable(mutant) and _usable(wt)):
         return out
 
-    xs = x.reshape(1, -1)
-    p_m = _kde(mutant, bw_adjust).evaluate(xs)
-    p_wt = _kde(wt, bw_adjust).evaluate(xs)
+    if method == "density":
+        xs = x.reshape(1, -1)
+        p_m = _kde(mutant, bw_adjust).evaluate(xs)
+        p_wt = _kde(wt, bw_adjust).evaluate(xs)
+    else:
+        o = 1.0 if mutant.mean() >= wt.mean() else -1.0     # orient: the mutants are the higher group
+        xs = o * x.ravel()
+        finite = np.isfinite(xs)
+        p_m = np.full(xs.shape, np.nan)
+        p_wt = np.full(xs.shape, np.nan)
+        p_m[finite] = _kde_cdf(o * mutant, bw_adjust)(xs[finite])
+        p_wt[finite] = 1.0 - _kde_cdf(o * wt, bw_adjust)(xs[finite])
+        p_m, p_wt = p_m.reshape(1, -1), p_wt.reshape(1, -1)
     den = p_m + p_wt
     ok = np.isfinite(x.ravel()) & (den > 0)
     res = np.full(den.shape, np.nan)
@@ -106,14 +147,14 @@ def _larger_abs(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _gene_rl(gene: str, carriers: np.ndarray, wt: np.ndarray, traits: Sequence[pd.DataFrame],
-             samples: pd.Index, bw_adjust: float = 1.0) -> np.ndarray:
+             samples: pd.Index, bw_adjust: float = 1.0, method: str = DEFAULT_RL_METHOD) -> np.ndarray:
     """RL of one gene over all ``samples``, combining the traits by larger |RL|."""
     rl = np.full(len(samples), np.nan)
     for tr in traits:
         if gene not in tr.index:
             continue
         v = tr.loc[gene, samples].to_numpy(dtype=float)
-        rl = _larger_abs(rl, relative_likelihood(v, v[carriers], v[wt], bw_adjust))
+        rl = _larger_abs(rl, relative_likelihood(v, v[carriers], v[wt], bw_adjust, method))
     return rl
 
 
@@ -130,7 +171,8 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
                            min_mut: int = 10,
                            min_wt: int = 10,
                            key: Optional[Mapping[str, str]] = None,
-                           bw_adjust: float = 1.0) -> pd.DataFrame:
+                           bw_adjust: float = 1.0,
+                           method: str = DEFAULT_RL_METHOD) -> pd.DataFrame:
     """Mutant phenotype score for each row of ``mutations``.
 
     Parameters
@@ -157,6 +199,8 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
         by the row ids of ``mutations``.
     bw_adjust : float
         Multiplier of the KDE bandwidth (see :func:`relative_likelihood`); 1.0 = Scott's rule.
+    method : {"density", "cdf"}
+        Definition of the probabilities in the relative likelihood (see :func:`relative_likelihood`).
 
     Returns
     -------
@@ -176,7 +220,7 @@ def mutant_phenotype_score(mutations: pd.DataFrame,
         m, wt = row == 1, row == 0  # NaN = not profiled: neither mutant nor WT
         if m.sum() < min_mut or wt.sum() < min_wt:
             continue
-        rows[rid] = _gene_rl(gene, m, wt, traits, samples, bw_adjust)
+        rows[rid] = _gene_rl(gene, m, wt, traits, samples, bw_adjust, method)
     return pd.DataFrame.from_dict(rows, orient="index", columns=samples)
 
 
@@ -270,7 +314,8 @@ def locus_specific_mps(variants: pd.DataFrame,
                        min_mps: int = 10,
                        min_wt: int = 10,
                        exclude_other_variants: bool = True,
-                       bw_adjust: float = 1.0):
+                       bw_adjust: float = 1.0,
+                       method: str = DEFAULT_RL_METHOD):
     """Locus-specific analysis of individual variants (Alvarez et al., Fig. 6).
 
     Every variant (e.g. ``KRAS:G12D``) is compared with the *wild-type* samples of its gene:
@@ -315,8 +360,8 @@ def locus_specific_mps(variants: pd.DataFrame,
         Minimum WT samples (gene state 0) for the per-variant MPS.
     exclude_other_variants : bool
         Exclude carriers of other variants of the gene from the association test.
-    bw_adjust : float
-        Multiplier of the KDE bandwidth of the MPS (see :func:`relative_likelihood`).
+    bw_adjust, method :
+        Bandwidth multiplier and RL definition of the MPS (see :func:`relative_likelihood`).
 
     Returns
     -------
@@ -375,7 +420,7 @@ def locus_specific_mps(variants: pd.DataFrame,
         wt = (state.loc[gene, samples] == 0).to_numpy()
         if wt.sum() < min_wt:
             continue
-        rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples, bw_adjust)
+        rows[vid] = _gene_rl(gene, carriers, wt, mut_traits, samples, bw_adjust, method)
     mps = pd.DataFrame.from_dict(rows, orient="index", columns=samples)
     return assoc, mps
 
@@ -389,7 +434,8 @@ def mps_targets(mutations: pd.DataFrame,
                 min_mut: int = 10,
                 min_wt: int = 10,
                 lr: float = DEFAULT_LR,
-                bw_adjust: float = 1.0):
+                bw_adjust: float = 1.0,
+                method: str = DEFAULT_RL_METHOD):
     """Test mutation rows (e.g. a gene fusion) against the activity of chosen target proteins.
 
     Typical use: a fusion or hotspot that is not itself a protein, tested for its effect on the
@@ -412,8 +458,8 @@ def mps_targets(mutations: pd.DataFrame,
         As in :func:`mutant_phenotype_score`; pairs below the thresholds get no MPS (NaN).
     lr : float
         Likelihood ratio defining the mutant / WT phenotype (default 3, RL > 0.5).
-    bw_adjust : float
-        Multiplier of the KDE bandwidth of the MPS (see :func:`relative_likelihood`).
+    bw_adjust, method :
+        Bandwidth multiplier and RL definition of the MPS (see :func:`relative_likelihood`).
 
     Returns
     -------
@@ -450,7 +496,7 @@ def mps_targets(mutations: pd.DataFrame,
                 continue
             one = mutations.loc[[rid]]
             mps = mutant_phenotype_score(one, activity, rpt, min_mut=min_mut, min_wt=min_wt, key={rid: tgt},
-                                        bw_adjust=bw_adjust)
+                                        bw_adjust=bw_adjust, method=method)
             if len(mps):
                 v = mps.iloc[0].to_numpy()
                 mps_rows[(rid, tgt)] = mps.iloc[0]

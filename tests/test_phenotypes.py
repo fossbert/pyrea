@@ -151,12 +151,15 @@ def test_vectorised_kde_matches_relative_likelihood(rng):
     m = rng.normal(1, 1, (4, 12))
     w = rng.normal(0, 1, (4, 40))
     x = rng.normal(0, 2, (4, 30))
-    for bw in (1.0, 1.7):
-        got = _rl_rows(x, m, w, bw)
-        ref = np.vstack([pr.relative_likelihood(x[i], m[i], w[i], bw_adjust=bw) for i in range(4)])
-        np.testing.assert_allclose(got, ref, atol=1e-12)
+    m[1] -= 3.0                                           # one row with the mutants below the WT (orientation)
+    for method in ("cdf", "density"):
+        for bw in (1.0, 1.7):
+            got = _rl_rows(x, m, w, bw, method)
+            ref = np.vstack([pr.relative_likelihood(x[i], m[i], w[i], bw_adjust=bw, method=method) for i in range(4)])
+            np.testing.assert_allclose(got, ref, atol=1e-10)
     m[2] = 5.0                                            # one distinct value: no KDE
-    assert np.isnan(_rl_rows(x, m, w, 1.0)[2]).all()
+    for method in ("cdf", "density"):
+        assert np.isnan(_rl_rows(x, m, w, 1.0, method)[2]).all()
 
 
 def test_auc_rows_matches_scalar_and_handles_nan(rng):

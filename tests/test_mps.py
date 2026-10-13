@@ -112,8 +112,8 @@ def test_bw_adjust_default_is_unchanged(rng):
 def test_bw_adjust_smooths_and_stays_bounded(rng):
     m, w = rng.normal(2, 0.5, 15), rng.normal(0, 1, 120)
     x = np.sort(np.concatenate([m, w]))
-    narrow = pr.relative_likelihood(x, m, w, bw_adjust=1.0)
-    wide = pr.relative_likelihood(x, m, w, bw_adjust=2.5)
+    narrow = pr.relative_likelihood(x, m, w, bw_adjust=1.0, method="density")
+    wide = pr.relative_likelihood(x, m, w, bw_adjust=2.5, method="density")
     assert np.all(np.abs(wide) <= 1)
     assert (np.abs(wide) > 0.99).mean() < (np.abs(narrow) > 0.99).mean()   # less saturation in the tails
     assert np.abs(np.diff(wide)).max() < np.abs(np.diff(narrow)).max()     # smaller jumps along the trait
@@ -262,3 +262,96 @@ def test_locus_specific_mps_wt_is_gene_wildtype(data):
     assert mps.loc["GENE_A:X", m].mean() > 0.5
     # Y carriers got a score although they are neither X carriers nor WT
     assert mps.loc["GENE_A:X", carriers[12:]].notna().all()
+
+
+# ---- RL definition: method="cdf" (default) vs "density" ------------------------------------------
+
+def test_default_method_is_density(rng, data):
+    m, w = rng.normal(1.5, 1, 25), rng.normal(0, 1, 80)
+    x = np.linspace(-3, 5, 40)
+    np.testing.assert_array_equal(pr.relative_likelihood(x, m, w), pr.relative_likelihood(x, m, w, method="density"))
+    assert not np.allclose(pr.relative_likelihood(x, m, w), pr.relative_likelihood(x, m, w, method="cdf"))
+    mut, G, R = data
+    np.testing.assert_array_equal(pr.mutant_phenotype_score(mut, G, R).to_numpy(),
+                                  pr.mutant_phenotype_score(mut, G, R, method="density").to_numpy())
+    assert not np.allclose(pr.mutant_phenotype_score(mut, G, R).to_numpy(),
+                           pr.mutant_phenotype_score(mut, G, R, method="cdf").to_numpy())
+
+
+def test_density_rl_threshold_is_likelihood_ratio_3(rng):
+    """RL > 0.5 <=> p_M / p_WT > 3 <=> P(M|x) > 0.75 for method="density"; not so for "cdf"."""
+    from scipy.stats import gaussian_kde
+    m, w = rng.normal(2, 1, 400), rng.normal(0, 1, 400)
+    x = np.linspace(-2, 4, 300)
+    pm, pw = gaussian_kde(m)(x), gaussian_kde(w)(x)
+    rl = pr.relative_likelihood(x, m, w, method="density")
+    np.testing.assert_array_equal(rl > 0.5, pm / pw > 3)
+    np.testing.assert_allclose(rl, 2 * pm / (pm + pw) - 1)                      # RL = 2 P(M|x) - 1
+    cdf = pr.relative_likelihood(x, m, w, method="cdf")
+    assert np.any((cdf > 0.5) & (pm / pw <= 3))                                 # cdf-RL > 0.5 with LR below 3
+
+
+def test_density_method_is_the_kde_ratio(rng):
+    from scipy.stats import gaussian_kde
+    m, w = rng.normal(1, 1, 20), rng.normal(0, 1.3, 60)
+    x = np.linspace(-3, 4, 30)
+    pm, pw = gaussian_kde(m)(x), gaussian_kde(w)(x)
+    np.testing.assert_allclose(pr.relative_likelihood(x, m, w, method="density"), (pm - pw) / (pm + pw))
+
+
+def test_cdf_method_is_tail_probability_ratio(rng):
+    from scipy.stats import gaussian_kde
+    m, w = rng.normal(1, 1, 20), rng.normal(0, 1.3, 60)             # mutants higher
+    x = np.linspace(-3, 4, 30)
+    km, kw = gaussian_kde(m), gaussian_kde(w)
+    Fm = np.array([km.integrate_box_1d(-np.inf, v) for v in x])
+    Sw = np.array([kw.integrate_box_1d(v, np.inf) for v in x])
+    np.testing.assert_allclose(pr.relative_likelihood(x, m, w, method="cdf"), (Fm - Sw) / (Fm + Sw), atol=1e-10)
+    # mutants lower: the trait is oriented first, the mutant-like end is the low one
+    rl = pr.relative_likelihood(-x, -m, -w, method="cdf")
+    np.testing.assert_allclose(rl, (Fm - Sw) / (Fm + Sw), atol=1e-10)
+
+
+def test_cdf_bounded_antisymmetric_and_monotone(rng):
+    m, w = rng.normal(1.2, 1, 25), rng.normal(0, 1, 90)
+    x = np.sort(np.concatenate([m, w, rng.normal(0.6, 2, 50)]))
+    rl = pr.relative_likelihood(x, m, w, method="cdf")
+    assert np.all(np.abs(rl) <= 1) and rl[0] < -0.8 and rl[-1] > 0.8
+    assert np.all(np.diff(rl) >= -1e-12)                                      # monotone in the trait
+    np.testing.assert_allclose(pr.relative_likelihood(x, w, m, method="cdf"), -rl, atol=1e-12)   # swap groups
+    # mutants LOWER than WT: RL is positive at the low end and decreasing in x
+    low = pr.relative_likelihood(x, m - 6, w, method="cdf")
+    assert low[0] > 0.5 > -0.5 > low[-1] and np.all(np.diff(low) <= 1e-12)
+
+
+def test_cdf_is_monotone_where_density_is_not(rng):
+    """Bimodal mutants (one mode each side of WT): the density RL is high on both sides, the CDF RL is a ramp."""
+    m = np.concatenate([rng.normal(-3, 0.4, 20), rng.normal(3, 0.4, 20)])
+    w = rng.normal(0, 0.8, 100)
+    x = np.linspace(-5, 5, 200)
+    dens = pr.relative_likelihood(x, m, w, method="density")
+    cdf = pr.relative_likelihood(x, m, w, method="cdf")
+    assert dens[0] > 0.5 and dens[-1] > 0.5 and dens[100] < 0                    # non-monotone: both tails mutant-like
+    assert np.all(np.abs(np.diff(cdf)) < 0.5)                                    # no jumps
+    assert np.all(np.diff(cdf) * np.sign(cdf[-1] - cdf[0]) >= -1e-12)            # monotone
+
+
+def test_unknown_method_and_passthrough(data):
+    mut, G, R = data
+    with pytest.raises(ValueError, match="method"):
+        pr.relative_likelihood([0.0, 1.0], [0.0, 1.0, 2.0], [3.0, 4.0, 5.0], method="bogus")
+    with pytest.raises(ValueError, match="method"):
+        pr.compare_phenotypes({"A": mut.loc["GENE_A"]}, "GENE_A", G, R, method="bogus")
+    dens = pr.mutant_phenotype_score(mut, G, R, method="density")
+    _, mps = pr.mps_targets(mut.loc[["GENE_A"]], ["GENE_A"], G, R, associate=False, method="density")
+    np.testing.assert_allclose(mps.iloc[0].to_numpy(), dens.loc["GENE_A"].to_numpy())
+    c1 = pr.compare_phenotypes({"A": mut.loc["GENE_A"]}, "GENE_A", G, R, n_boot=0)
+    c2 = pr.compare_phenotypes({"A": mut.loc["GENE_A"]}, "GENE_A", G, R, n_boot=0, method="cdf")
+    assert not np.allclose(c1.scores["MPS[A]"].to_numpy(), c2.scores["MPS[A]"].to_numpy(), equal_nan=True)
+    assert pr.plot_mps_traits("GENE_B", mut, G, R, method="density") is not None
+    assert pr.plot_rl_diagnostic("GENE_A", mut, G, R, method="density") is not None
+    # same ranking of samples by either definition within one trait (monotone transforms of the trait)
+    cdf = pr.mutant_phenotype_score(mut, G, None, method="cdf").loc["GENE_A"]
+    den = pr.mutant_phenotype_score(mut, G, None).loc["GENE_A"]
+    assert cdf.corr(G.loc["GENE_A"], method="spearman") > 0.99 or cdf.corr(G.loc["GENE_A"], method="spearman") < -0.99
+    assert abs(den.corr(cdf, method="spearman")) > 0.9

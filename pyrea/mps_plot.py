@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .mps import DEFAULT_LR, _kde, _larger_abs, lr_to_rl, relative_likelihood
+from .mps import DEFAULT_LR, DEFAULT_RL_METHOD, _kde, _larger_abs, lr_to_rl, relative_likelihood
 
 __all__ = ["plot_mps_rank", "plot_mps_traits", "plot_rl_diagnostic"]
 
@@ -40,7 +40,8 @@ def plot_mps_rank(mps: pd.Series, mutated: pd.Series, lr: float = DEFAULT_LR, ax
 
 def plot_mps_traits(gene: str, mutations: pd.DataFrame, activity: pd.DataFrame,
                     rpt: pd.DataFrame | None = None, lr: float = DEFAULT_LR,
-                    bw_adjust: float = 1.0, min_mut: int = 10, min_wt: int = 10):
+                    bw_adjust: float = 1.0, method: str = DEFAULT_RL_METHOD,
+                    min_mut: int = 10, min_wt: int = 10):
     """Rank plot per trait: RL of G, RL of RPT and the MPS (their larger-|RL| combination).
 
     Shows which trait carries the signal and where the MPS jumps from one trait to the other
@@ -55,7 +56,7 @@ def plot_mps_traits(gene: str, mutations: pd.DataFrame, activity: pd.DataFrame,
         Binary genes x samples (NaN = not profiled).
     activity, rpt : pd.DataFrame
         G- and (optionally) RPT-activity, genes x samples.
-    lr, bw_adjust :
+    lr, bw_adjust, method :
         See :func:`plot_mps_rank` and :func:`pyrea.relative_likelihood`.
     """
     traits = {"G": activity}
@@ -72,7 +73,7 @@ def plot_mps_traits(gene: str, mutations: pd.DataFrame, activity: pd.DataFrame,
     panels = {}
     for name, df in traits.items():
         v = df.loc[gene, samples].to_numpy(dtype=float)
-        panels[name] = pd.Series(relative_likelihood(v, v[m], v[wt], bw_adjust), index=samples)
+        panels[name] = pd.Series(relative_likelihood(v, v[m], v[wt], bw_adjust, method), index=samples)
     if rpt is not None:
         panels["MPS (larger |RL|)"] = pd.Series(_larger_abs(panels["G"].to_numpy(), panels["RPT"].to_numpy()),
                                                 index=samples)
@@ -83,15 +84,16 @@ def plot_mps_traits(gene: str, mutations: pd.DataFrame, activity: pd.DataFrame,
         ax.set_title(name, fontsize=9)
         ax.set_ylabel("RL" if ax is axes[0, 0] else "")
     fig.suptitle(f"{gene}: {int(m.sum())} carriers, {int(wt.sum())} WT"
-                 + ("" if bw_adjust == 1.0 else f", bandwidth x {bw_adjust:g}"), fontsize=9)
+                 + ("" if bw_adjust == 1.0 else f", bandwidth x {bw_adjust:g}")
+                 + ("" if method == DEFAULT_RL_METHOD else f", RL from {method}"), fontsize=9)
     fig.tight_layout()
     return fig
 
 
 def plot_rl_diagnostic(gene: str, mutations: pd.DataFrame, activity: pd.DataFrame,
                        rpt: pd.DataFrame | None = None, lr: float = DEFAULT_LR,
-                       bw_adjust: float = 1.0):
-    """Per trait: mutant vs WT density (top) and the RL curve (bottom)."""
+                       bw_adjust: float = 1.0, method: str = DEFAULT_RL_METHOD):
+    """Per trait: mutant vs WT density (top) and the RL curve (bottom, per ``method``)."""
     traits = {"G-activity": activity}
     if rpt is not None:
         traits["RPT-activity"] = rpt
@@ -115,7 +117,7 @@ def plot_rl_diagnostic(gene: str, mutations: pd.DataFrame, activity: pd.DataFram
                 top.fill_between(grid, dens, color=col, alpha=0.15)
         top.set_title(name)
         top.legend(frameon=False)
-        bot.plot(grid, relative_likelihood(grid, v[m], v[~m], bw_adjust), color="purple")
+        bot.plot(grid, relative_likelihood(grid, v[m], v[~m], bw_adjust, method), color="purple")
         bot.axhline(0, color="0.5", ls="--")
         for y in (thr, -thr):
             bot.axhline(y, color="r", ls=":")
