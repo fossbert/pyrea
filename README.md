@@ -37,6 +37,7 @@ BiocManager::install("viper")
 | `pyrea.rbackend.regulon` | `read_regulon_rds` -- ARACNe/viper regulon from `.rds` to long format (needs R) |
 | `pyrea.rpt` | `viper_rpt` -- residual post-translational activity (`rank`, `lineal`, `spline`), pure Python, matches `viper::viperRPT` |
 | `pyrea.mps_plot` | `plot_mps_rank`, `plot_mps_traits`, `plot_rl_diagnostic` |
+| `pyrea.phenotypes_plot` | figures of `compare_phenotypes` results: `cmp.plot()`, `plot_scores`, `plot_scale_scatter`, `plot_cross`, `plot_auc` |
 | `pyrea.concordance` | `activity_vs_expression` -- is an effect seen in the activity but not (or oppositely) in the expression? |
 
 ```python
@@ -315,6 +316,86 @@ How it differs from the MPS (relative likelihood):
 ```python
 cmp = pr.compare_phenotypes(groups, "RHOA", vpres, rpt)            # intervals included
 cmp.cross[["n", "frac_mutant_phenotype", "auc", "auc_low", "auc_high", "p"]]
+```
+
+#### Illustrating a phenocopy
+
+`compare_phenotypes` returns a `PhenotypeComparison` that carries its settings (target, `method`, reference, groups, `lr`,
+`alpha`, `n_boot`) and draws the figures itself (matplotlib only, no cbrviz needed):
+
+```python
+cmp = pr.compare_phenotypes(groups, "RHOA", vpres, rpt)
+fig = cmp.plot()                                   # four panels A-D, see below
+cmp.plot_scores("G")                               # A: one panel, e.g. on an own axes:  cmp.plot_scores("RPT", ax=ax)
+cmp.plot_scale_scatter("RHOA mut", "CLDN-ARHGAP fusion")   # B
+cmp.plot_cross()                                   # C
+cmp.plot_auc(pairwise=True)                        # D
+```
+
+| panel | shows | reading |
+| --- | --- | --- |
+| A `plot_scores` | the score (`G`, `RPT` or `MPS[<group>]`) per group, one point per sample, boxplot behind | is B shifted in the same direction as A? With few samples the points matter more than the box |
+| B `plot_scale_scatter` | every sample on the MPS scale of A (x) and of B (y); dotted lines: mutant / WT phenotype thresholds and the diagonal | phenocopy puts the B samples with the A samples in the upper right; a group that only lies further out along the diagonal is stronger, not necessarily the same |
+| C `plot_cross` | matrix of `cmp.cross`: AUC against the reference with its interval and the share with the mutant phenotype; dashed frame = in-sample | phenocopy: the off-diagonal AUC is above 0.5 with an interval clear of 0.5, in both directions |
+| D `plot_auc` | forest plot of the AUCs with their bootstrap intervals (filled: the group was not used to build the scale; hollow: in-sample; grey squares: A against B) | how wide the intervals are, which statements they carry, and whether A and B differ from each other |
+
+Colours and group labels (with `n`) are the same in all panels; the title names the target and the RL definition (`method`).
+
+The panels are clean (no numbers, no brackets), so nothing overloads a figure that does not need statistics. Each is drawn on a
+matplotlib `Axes` that you can pass (`ax=`) and that is returned, so axes, limits, labels and further artists can be changed
+afterwards (`cmp.plot(axes=...)` takes 4 axes, or 2 with a single group, and returns them). Statistics are added afterwards and
+selectively, as with `cbrviz.StripBox.add_pair_p` (`ax=None` uses the current axes; `**text_kwargs` go to matplotlib):
+
+| panel | add statistics | writes |
+| --- | --- | --- |
+| A `plot_scores` | `cmp.add_group_stats(score, ax=ax)` | AUC with its bootstrap interval (`ci=False`: without) and the Mann-Whitney p of every group against the reference, above each group |
+| A | `cmp.add_pair_stats(a, b, score, ax=ax)` | bracket between two groups with the AUC and p of their comparison (`cmp.pairwise`); `yoffset` raises it above the group texts, `auc=False` prints p only |
+| B `plot_scale_scatter` | `cmp.add_scatter_stats(ax=ax)` | AUC of each group on both scales in a small text box (`loc=`) |
+| C `plot_cross` | `cmp.add_cross_stats(ax=ax)` | AUC, interval and share with the mutant phenotype in the cells |
+| D `plot_auc` | `cmp.add_auc_p(ax=ax)` | p of every row at the right edge |
+
+**Selecting what is shown.** Scores are named `"G"`, `"RPT"` (if given) and `"MPS[<group>]"` (`cmp.score_names`). `plot_scores(score)`
+shows one score; `plot_auc(scores=[...])` shows the chosen scores as rows, in the order given; `groups=[...]` restricts
+the groups (and their order) in `plot_scores`, `plot_scale_scatter`, `plot_cross` and `plot_auc` (`reference=False` hides the
+reference in `plot_scores`); `plot_scale_scatter(scale_a, scale_b)` chooses the two scales. `cmp.plot(scores=..., groups=...)`
+passes the choice on to the four panels, and the `add_*` functions follow what the panel shows.
+
+```python
+cmp.plot_auc(scores=["G", "MPS[RHOA mut]"], groups=["CLDN-ARHGAP fusion"])      # one group, two scores
+cmp.plot(scores=["G"], stats=True)                                              # overview with a forest plot of G only
+```
+
+`exact_p=True` prints p as `1.2e-03`. `cmp.plot(stats=True)` adds all of them, for a figure that goes into a manuscript.
+`colors={"group": "colour"}` sets group colours consistently in the panels that show groups.
+
+```python
+fig, axes = plt.subplots(1, 3, figsize=(11.5, 3.1), gridspec_kw={"width_ratios": [1.2, 1.2, 1.5]})
+pal = {"neither": "0.7", "RHOA mut": "tab:red", "CLDN-ARHGAP fusion": "tab:blue"}
+cmp.plot_scores("G", ax=axes[0], colors=pal)
+cmp.add_group_stats("G", ax=axes[0], ci=False)                          # only where a number is needed
+cmp.add_pair_stats("RHOA mut", "CLDN-ARHGAP fusion", "G", ax=axes[0], yoffset=0.25)
+cmp.plot_scores("MPS[RHOA mut]", ax=axes[1], colors=pal)
+axes[1].axhline(0.5, ls=":", lw=0.5, color="k")                         # own additions: it is an ordinary Axes
+cmp.plot_auc(ax=axes[2], scores=["G", "RPT", "MPS[RHOA mut]"], colors=pal)
+cmp.add_auc_p(ax=axes[2])
+```
+
+For a custom figure, `cmp.scale_xy(a, b)` returns the data of panel B and `pyrea.phenotypes_plot.group_colors(cmp)` the
+colours; with [cbrviz](https://github.com/fossbert/cbrviz):
+
+```python
+from cbrviz import XYview, StripBox
+from pyrea.phenotypes_plot import group_colors
+
+cols = group_colors(cmp)
+order = [cmp.reference] + list(cmp.groups)
+xy, grp = cmp.scale_xy("RHOA mut", "CLDN-ARHGAP fusion")          # columns scale_A, scale_B; overlap / unprofiled dropped
+cats = [g for g in order if g in set(grp)]
+xv = XYview(xy, s1=grp, s1_order=cats, s1_colors=[cols[g] for g in cats], s=14, alpha=0.8)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6, 2.8))
+ax1.scatter(**xv.scatter_call); xv.add_xy_line(ax=ax1); ax1.legend(handles=xv.handles, frameon=False, fontsize=6)
+df = cmp.scores.loc[cmp.scores["group"].isin(order), ["G", "group"]]
+sb = StripBox(df, s1_order=order, s1_colors=[cols[g] for g in order]); sb.boxplt(ax=ax2, widths=0.6); sb.add_strips(ax=ax2, s=8)
 ```
 
 **What it is good for.** (1) *Functional annotation of non-canonical alterations*: does a fusion, a rare variant or a

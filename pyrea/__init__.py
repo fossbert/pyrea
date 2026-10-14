@@ -15,6 +15,7 @@ from .stratified import stratified_comparison, differential_activity, Stratified
 from .cluster import (zscore_signature, viper_similarity, similarity_to_distance, pam, cluster_reliability,
                       cluster_samples, tsne_embedding, adjusted_rand_index, ari_permutation_test, ClusterResult)
 from .phenotypes import compare_phenotypes, PhenotypeComparison
+from .phenotypes_plot import plot_phenocopy
 from .concordance import activity_vs_expression, CONCORDANCE_CATEGORIES, CONCORDANCE_COLORS
 from .mps_plot import plot_mps_rank, plot_mps_traits, plot_rl_diagnostic
 from .utils import gene_sets_to_regulon, sig_to_reg, load_genesets, load_species_converter

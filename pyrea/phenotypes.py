@@ -48,12 +48,124 @@ class PhenotypeComparison:
         group == scale: the scale was fitted on these samples, so the value is optimistic).
         Phenocopy: if group B scores high on the scale defined by A (and A on B's scale), the two
         alterations put the target into the same state. See the README for how to read it.
+    target, method, reference, groups, lr, alpha, n_boot :
+        The settings of the comparison (target protein, RL definition, reference label, group names in
+        the order given, likelihood-ratio threshold, interval level, bootstrap resamples). The figure
+        methods use them for titles and colours.
+
+    Methods
+    -------
+    ``plot()`` (four-panel overview), ``plot_scores()``, ``plot_scale_scatter()``, ``plot_cross()``,
+    ``plot_auc()``: clean figures on an Axes that can be passed; ``add_group_stats()``, ``add_pair_stats()``,
+    ``add_scatter_stats()``, ``add_cross_stats()``, ``add_auc_p()``: statistics added afterwards, selectively;
+    see :mod:`pyrea.phenotypes_plot`. ``scale_xy()``: the data of the scatter for a custom plot, e.g. with
+    ``cbrviz.XYview``.
     """
 
     scores: pd.DataFrame
     summary: pd.DataFrame
     pairwise: pd.DataFrame
     cross: pd.DataFrame
+    target: str = ""
+    method: str = DEFAULT_RL_METHOD
+    reference: str = "neither"
+    groups: tuple = ()
+    lr: float = DEFAULT_LR
+    alpha: float = 0.05
+    n_boot: int = 0
+
+    # ------------------------------------------------------------------ figures (see pyrea.phenotypes_plot)
+    # The panels are clean. Each draws on a matplotlib Axes that can be passed (``ax=``) and returns it; statistics are
+    # added afterwards, selectively, with the ``add_*`` methods (``ax=None``: current axes), as in cbrviz.StripBox.
+    @property
+    def score_names(self) -> list:
+        """Names of the scores available for the panels: ``"G"``, ``"RPT"`` (if given) and ``"MPS[<group>]"`` per group."""
+        return [c for c in self.scores.columns if c != "group"]
+
+    def plot(self, scale_a: Optional[str] = None, scale_b: Optional[str] = None, score: str = "G", figsize=None,
+             axes=None, stats: bool = False, colors: Optional[dict] = None, pairs: Optional[list] = None,
+             scores: Optional[list] = None, groups: Optional[list] = None):
+        """Four-panel overview (``plot_scores``, ``plot_scale_scatter``, ``plot_cross``, ``plot_auc``).
+
+        Returns the figure, or the list of axes if ``axes`` (4, or 2 with a single group) is given.
+        ``stats=True`` adds all statistics (for a figure that goes into a manuscript). ``scores`` selects the rows of
+        the forest plot (see ``score_names``), ``groups`` the groups shown in all panels."""
+        from .phenotypes_plot import plot_phenocopy
+        return plot_phenocopy(self, scale_a, scale_b, score, figsize, axes, stats, colors, pairs, scores, groups)
+
+    def plot_scores(self, score: str = "G", ax=None, seed: int = 0, title: Optional[str] = None,
+                    colors: Optional[dict] = None, groups: Optional[list] = None, reference: bool = True):
+        """Distribution of ``score`` (``"G"``, ``"RPT"``, ``"MPS[<group>]"``) per group, one point per sample;
+        ``groups`` selects and orders the groups, ``reference=False`` hides the reference."""
+        from .phenotypes_plot import plot_scores
+        return plot_scores(self, score, ax, seed, title, colors, groups, reference)
+
+    def plot_scale_scatter(self, scale_a: Optional[str] = None, scale_b: Optional[str] = None, ax=None,
+                           title: Optional[str] = None, colors: Optional[dict] = None, groups: Optional[list] = None):
+        """Every sample on the MPS scale of group A (x) and of group B (y); ``groups`` restricts the groups drawn."""
+        from .phenotypes_plot import plot_scale_scatter
+        return plot_scale_scatter(self, scale_a, scale_b, ax, title, colors, groups)
+
+    def plot_cross(self, ax=None, cmap: str = "RdBu_r", title: Optional[str] = None, groups: Optional[list] = None):
+        """Matrix of ``cross``: AUC against the reference per (scale, group), in-sample cells framed;
+        ``groups`` restricts the matrix to some groups."""
+        from .phenotypes_plot import plot_cross
+        return plot_cross(self, ax, cmap, title, groups)
+
+    def plot_auc(self, ax=None, scores: Optional[list] = None, pairwise: bool = False, title: Optional[str] = None,
+                 colors: Optional[dict] = None, groups: Optional[list] = None):
+        """Forest plot of the AUCs with their bootstrap intervals; ``scores`` (see ``score_names``) and ``groups``
+        select the rows."""
+        from .phenotypes_plot import plot_auc
+        return plot_auc(self, ax, scores, pairwise, title, colors, groups)
+
+    def add_group_stats(self, score: str = "G", ax=None, ci: bool = True, colors: Optional[dict] = None,
+                        exact_p: bool = False, **text_kwargs):
+        """After ``plot_scores``: AUC (with interval) and Mann-Whitney p of every group against the reference."""
+        from .phenotypes_plot import add_group_stats
+        return add_group_stats(self, score, ax, ci, colors, exact_p, **text_kwargs)
+
+    def add_pair_stats(self, group_a: str, group_b: str, score: str = "G", ax=None, yoffset: float = 0.08,
+                       auc: bool = True, exact_p: bool = False, line_kwargs: Optional[dict] = None, **text_kwargs):
+        """After ``plot_scores``: bracket between two groups with the AUC and p of their comparison."""
+        from .phenotypes_plot import add_pair_stats
+        return add_pair_stats(self, group_a, group_b, score, ax, yoffset, auc, exact_p, line_kwargs, **text_kwargs)
+
+    def add_scatter_stats(self, ax=None, scale_a: Optional[str] = None, scale_b: Optional[str] = None,
+                          loc: str = "upper left", **text_kwargs):
+        """After ``plot_scale_scatter``: the AUC of every group on both scales as a small text box."""
+        from .phenotypes_plot import add_scatter_stats
+        return add_scatter_stats(self, ax, scale_a, scale_b, loc, **text_kwargs)
+
+    def add_cross_stats(self, ax=None, ci: bool = True, share: bool = True, **text_kwargs):
+        """After ``plot_cross``: AUC, interval and share with the mutant phenotype in the cells."""
+        from .phenotypes_plot import add_cross_stats
+        return add_cross_stats(self, ax, ci, share, **text_kwargs)
+
+    def add_auc_p(self, ax=None, exact_p: bool = False, **text_kwargs):
+        """After ``plot_auc``: the Mann-Whitney p of every row at the right edge."""
+        from .phenotypes_plot import add_auc_p
+        return add_auc_p(self, ax, exact_p, **text_kwargs)
+
+    def scale_xy(self, scale_a: Optional[str] = None, scale_b: Optional[str] = None):
+        """Data for a custom scatter (e.g. ``cbrviz.XYview``): ``(xy, group)``.
+
+        ``xy`` has the columns ``scale_A`` and ``scale_B`` (RL of every sample on the MPS scale of the two
+        groups), ``group`` is the group label per sample; samples that are in several groups or not evaluable
+        are dropped.
+        """
+        names = list(self.groups)
+        if len(names) < 2:
+            raise ValueError("Need at least two groups")
+        a = names[0] if scale_a is None else scale_a
+        b = names[1] if scale_b is None else scale_b
+        for g in (a, b):
+            if g not in names:
+                raise ValueError(f"Unknown group {g!r}; groups are {names}")
+        sc = self.scores
+        keep = sc["group"].isin([self.reference] + names)
+        xy = pd.DataFrame({"scale_A": sc.loc[keep, f"MPS[{a}]"], "scale_B": sc.loc[keep, f"MPS[{b}]"]})
+        return xy.dropna(), sc.loc[xy.dropna().index, "group"]
 
 
 def _nan_stat(func, x: np.ndarray) -> float:
@@ -369,4 +481,5 @@ def compare_phenotypes(groups: Mapping[str, pd.Series],
                             "auc": auc, "auc_low": lo, "auc_high": hi, "p": p, "in_sample": k == b}
     cross = pd.DataFrame.from_dict(crow, orient="index")
     cross.index = pd.MultiIndex.from_tuples(cross.index, names=["scale", "group"])
-    return PhenotypeComparison(scores, summary, pairwise, cross)
+    return PhenotypeComparison(scores, summary, pairwise, cross, target=target, method=method, reference=reference,
+                               groups=tuple(names), lr=lr, alpha=alpha, n_boot=n_boot)
