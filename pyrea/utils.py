@@ -204,41 +204,59 @@ def _get_ges_tops(ges:pd.Series, direction:str, nn:int):
     
   
   
-def load_genesets(collection: str = 'h', 
-                  species: str = 'human'):
-  
+GENESET_COLLECTIONS = ('h', 'pid', 'wikipathways', 'reactome')
+GENESET_SPECIES = ('human', 'mouse')
+_GENESET_ALIASES = {'hallmark': 'h', 'hallmarks': 'h', 'wp': 'wikipathways'}
+
+
+def load_genesets(collection: str = 'h',
+                  species: str = 'human',
+                  verbose: bool = True):
+  """Load one of the bundled gene set collections as a dictionary ``term -> list of gene symbols``.
+
+  Parameters
+  ----------
+  collection : {'h', 'pid', 'wikipathways', 'reactome'}
+      MSigDB v7.4 Hallmark ('h'; also 'hallmark'), C2 canonical pathways PID, WikiPathways and Reactome. See
+      :func:`available_genesets` for sizes. Case-insensitive.
+  species : {'human', 'mouse'}
+  verbose : bool
+      Print which file was loaded (default True; ``False`` is silent).
+  """
+
   DIR = os.path.dirname(os.path.realpath(__file__))
-  
-  coptions = ['h', 'pid', 'wikipathways', 'reactome']
-    
-  if collection.lower() not in coptions:
-    raise ValueError(f"{collection} is not a suitable option. Please choose from {', '.join(coptions)}.")
-  
-  soptions =  ['human', 'mouse']
-  
-  if species.lower() not in soptions:
-    raise ValueError(f"{species} is not a suitable option. Please choose from {', '.join(soptions)}.")
-  
+
+  collection = _GENESET_ALIASES.get(collection.lower(), collection.lower())
+  species = species.lower()
+
+  if collection not in GENESET_COLLECTIONS:
+    raise ValueError(f"{collection} is not a suitable option. Please choose from {', '.join(GENESET_COLLECTIONS)}.")
+
+  if species not in GENESET_SPECIES:
+    raise ValueError(f"{species} is not a suitable option. Please choose from {', '.join(GENESET_SPECIES)}.")
+
   if collection == 'h':
     gpattern = f"{collection}*{species}*"
   else:
     gpattern = f"*{collection}*{species}*"
-  
+
   fps = glob.glob(os.path.join(DIR, 'data', gpattern))
-  print(f"Found {len(fps)} gene set collection(s)!")
-  
-  fp = fps[0]  
+  if verbose:
+    print(f"Found {len(fps)} gene set collection(s)!")
+
+  fp = fps[0]
   bn = os.path.basename(fp)
-    
+
   try:
     with open(fp) as infile:
       genesets_in = json.load(infile)
-    
-    print(f"Loaded {bn} into a dictionary for you.")
+
+    if verbose:
+      print(f"Loaded {bn} into a dictionary for you.")
     return genesets_in
   except:
     raise ImportError(f'Something went wrong when trying to import {fp}')
-  
+
 
 
 def load_species_converter(keys="human"):
