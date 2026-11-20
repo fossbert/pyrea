@@ -310,9 +310,44 @@ def _weighted_overlap_null(rng, weights: np.ndarray, fixed_mask: np.ndarray, siz
     return out
 
 
-def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "positive", mor_min: float = 0.0,
+def _resolve_pairs(tfs: Optional[Sequence[str]], focus: Optional[str], pairs) -> tuple:
+    """(regulators, list of (tf1, tf2)) for the three ways to select the pairs: all of ``tfs``, ``focus`` against the others, ``pairs``."""
+    if pairs is not None:
+        if focus is not None:
+            raise ValueError("Give either focus or pairs, not both")
+        plist = []
+        for p in pairs:
+            if len(p) != 2 or p[0] == p[1]:
+                raise ValueError(f"Every pair needs two different regulators, got {tuple(p)!r}")
+            a, b = str(p[0]), str(p[1])
+            if (a, b) not in plist and (b, a) not in plist:
+                plist.append((a, b))
+        if not plist:
+            raise ValueError("pairs is empty")
+        names = list(dict.fromkeys(t for p in plist for t in p))
+        if tfs is not None:
+            out = [t for p in plist for t in p if str(t) not in {str(x) for x in tfs}]
+            if out:
+                raise ValueError(f"Regulators of pairs not in tfs: {sorted(set(out))}")
+        return names, plist
+    if tfs is None:
+        raise ValueError("Give tfs or pairs")
+    names = [str(t) for t in tfs]
+    if len(names) < 2:
+        raise ValueError("Need at least two regulators")
+    if len(set(names)) != len(names):
+        raise ValueError("Regulators must be unique")
+    if focus is not None:
+        focus = str(focus)
+        if focus not in names:
+            raise ValueError(f"focus {focus!r} is not in tfs")
+        return names, [(focus, t) for t in names if t != focus]
+    return names, list(combinations(names, 2))
+
+
+def regulon_overlap(regulon: pd.DataFrame, tfs: Optional[Sequence[str]] = None, tail: str = "positive", mor_min: float = 0.0,
                     min_likelihood: float = 0.0, universe: Optional[Iterable[str]] = None, n_perm: int = 0,
-                    seed: int = 0) -> RegulonOverlap:
+                    seed: int = 0, focus: Optional[str] = None, pairs: Optional[Sequence[tuple]] = None) -> RegulonOverlap:
     """Overlap of the regulons of several regulators, separated by the sign of the mode of regulation.
 
     Parameters
@@ -321,7 +356,8 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
         Long format as returned by :func:`pyrea.read_regulon_rds`: ``source`` (regulator), ``target``, ``mor`` (mode of
         regulation in [-1, 1]) and optionally ``likelihood`` (default 1).
     tfs : sequence of str
-        Regulators to compare (at least two); every pair is analysed.
+        Regulators to compare (at least two); every pair is analysed unless ``focus`` or ``pairs`` select some. May be
+        omitted if ``pairs`` is given.
     tail : {"positive", "negative", "both"}
         Which tails of the regulons are overlapped. ``"positive"`` (default): the activated targets of both
         regulators (``mor > mor_min``); ``"negative"``: the repressed targets (``mor < -mor_min``); ``"both"``: all four
@@ -336,6 +372,12 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
     n_perm : int
         Degree-weighted permutations per comparison for ``p_perm`` (0: only the hypergeometric p-value).
     seed : int
+    focus : str, optional
+        Test only this regulator (of ``tfs``) against each of the others (``tf1`` = ``focus``): n - 1 instead of n (n - 1) / 2
+        pairs, which saves time (permutations) and tests.
+    pairs : sequence of (str, str), optional
+        Test exactly these pairs (``tfs`` is then the union of the pairs). The result is the same as testing the pair
+        alone; the multiple-testing correction (BH) covers the pairs tested.
 
     Returns
     -------
@@ -362,11 +404,7 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
     """
     if tail not in _TAILS:
         raise ValueError(f"tail must be one of {_TAILS}")
-    tfs = [str(t) for t in tfs]
-    if len(tfs) < 2:
-        raise ValueError("Need at least two regulators")
-    if len(set(tfs)) != len(tfs):
-        raise ValueError("Regulators must be unique")
+    tfs, pair_list = _resolve_pairs(tfs, focus, pairs)
     missing = [t for t in missing_names(regulon, tfs)]
     if missing:
         raise ValueError(f"Regulators not in the regulon: {missing}")
@@ -411,7 +449,7 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
     rng = np.random.default_rng(seed)
 
     rows = []
-    for t1, t2 in combinations(tfs, 2):
+    for t1, t2 in pair_list:
         for s1, s2 in _SIGNS[tail]:
             a, b = sets[(t1, s1)], sets[(t2, s2)]
             n1, n2 = len(a), len(b)
@@ -455,7 +493,7 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
     likelihoods = lik.loc[targets.index]
 
     prow = []
-    for t1, t2 in combinations(tfs, 2):
+    for t1, t2 in pair_list:
         both = targets[[t1, t2]].dropna()
         nz = both[(both[t1] != 0) & (both[t2] != 0)]
         conc = int((np.sign(nz[t1]) == np.sign(nz[t2])).sum())
@@ -465,7 +503,7 @@ def regulon_overlap(regulon: pd.DataFrame, tfs: Sequence[str], tail: str = "posi
                      "mor_corr": corr})
     comb = {(s1, s2) for s1, s2 in _SIGNS[tail]}
     frames = []
-    for t1, t2 in combinations(tfs, 2):
+    for t1, t2 in pair_list:
         f = _shared_frame(targets, likelihoods, t1, t2)
         f.insert(0, "gene", f.index)
         f.insert(0, "tf2", t2)

@@ -18,6 +18,7 @@ from .phenotypes import compare_phenotypes, PhenotypeComparison
 from .phenotypes_plot import plot_phenocopy
 from .comutation import comutation_effect, CoMutationResult
 from .regulon_overlap import regulon_overlap, RegulonOverlap
+from .regulon_overlap_multi import overlap_across_networks, MultiOverlap
 from .genelists import GeneListCollection, gene_set_enrichment, available_genesets
 from .regulon_activity import split_activity, ActivitySplit
 from .concordance import activity_vs_expression, CONCORDANCE_CATEGORIES, CONCORDANCE_COLORS

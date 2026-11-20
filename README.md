@@ -39,7 +39,8 @@ BiocManager::install("viper")
 | `pyrea.mps_plot` | `plot_mps_rank`, `plot_mps_traits`, `plot_rl_diagnostic` |
 | `pyrea.phenotypes_plot` | figures of `compare_phenotypes` results: `cmp.plot()`, `plot_scores`, `plot_scale_scatter`, `plot_cross`, `plot_auc` |
 | `pyrea.comutation` | `comutation_effect` -- effect of a co-alteration with and without a driver (2 x 2 design); `CoMutationResult` with figures (`pyrea.comutation_plot`) |
-| `pyrea.regulon_overlap` | `regulon_overlap` -- overlap of the positive / negative target tails of several regulators, with hypergeometric and degree-weighted permutation null; `RegulonOverlap` with figures (`pyrea.regulon_overlap_plot`), gene list collection and export, enrichment, activity split (`pyrea.regulon_activity`) |
+| `pyrea.regulon_overlap` | `regulon_overlap` -- overlap of the positive / negative target tails of several regulators, with hypergeometric and degree-weighted permutation null; `RegulonOverlap` with figures (`pyrea.regulon_overlap_plot`), gene list collection and export, enrichment, activity split (`pyrea.regulon_activity`); `pairs=` / `focus=` select the pairs |
+| `pyrea.regulon_overlap_multi` | `overlap_across_networks` -- the overlap in a list of networks (paths of `.rds` files, one in memory at a time); `MultiOverlap` with per-pair summary across networks, recurrent shared targets, enrichment, export and a networks x pairs figure |
 | `pyrea.genelists` | `GeneListCollection` (named gene lists with provenance, export to xlsx / csv / gmt), `gene_set_enrichment` (over-representation; bundled collections by name), `available_genesets` |
 | `pyrea.concordance` | `activity_vs_expression` -- is an effect seen in the activity but not (or oppositely) in the expression? |
 
@@ -564,7 +565,7 @@ ov.matrix("jaccard", signs=("+", "+"))             # regulator x regulator matri
 - **`tail`** chooses which tails are overlapped: `"positive"` (default) the activated targets of both regulators (`+/+`), `"negative"` the
   repressed ones (`-/-`), `"both"` all four combinations, including the discordant ones (`+/-`: A activates what B represses).
   The sign threshold is `mor_min` (default 0: the sign alone; targets with `mor == 0` are in neither tail); `min_likelihood` drops weak
-  interactions first. Any number of regulators (every pair is analysed); `universe=` restricts the genes that can be targets (e.g.
+  interactions first. Any number of regulators (every pair is analysed, or `focus="TF"` against the others, or exactly `pairs=[("A", "B"), ...]`); `universe=` restricts the genes that can be targets (e.g.
   the genes of the expression matrix).
 - **Statistics.** `expected` and `p_hyper` come from the hypergeometric distribution (random sets drawn from the universe; one-sided
   enrichment). ARACNe regulons share hub targets, which this null ignores and then overstates significance. With `n_perm` a
@@ -654,6 +655,57 @@ sp.plot_scatter("unique", "unique"); sp.add_scatter_stats("unique", "unique", ax
 - **Example (STAD, ZCCHC24 and ZEB1, method `mad`):** activities correlate with rho 0.93 (the regulators' expression with 0.86). Without any shared
   gene, `unique x unique` is still 0.87, and random ZCCHC24 targets correlate with ZEB1's unique targets at 0.88 +- 0.01 against 0.94 for the
   shared ones: the overlap of 87 targets adds little; both regulons follow one common axis.
+
+#### Many networks at once (`overlap_across_networks`)
+
+For a list of networks (e.g. one ARACNe network per tumour type) the same analysis runs per network, **one network in memory at a time**,
+and everything is collected in a `MultiOverlap`. Give the paths of the `.rds` files (or a dict `name -> path`); the pairs to test are
+chosen as in `regulon_overlap`:
+
+```python
+paths = {"BRCA": "../Shared/networks/BRCA/ARACNe/FullReg.rds", "GBM": "../Shared/networks/GBM/FullReg.rds"}   # name -> path (or a plain list of paths)
+mo = pr.overlap_across_networks(paths, ["ZCCHC24", "ZEB1", "ZEB2", "SNAI2"], n_perm=1000)                # all pairs of tfs
+mo = pr.overlap_across_networks(paths, ["ZCCHC24", "ZEB1", "ZEB2", "SNAI2"], focus="ZCCHC24")            # one regulator against the others
+mo = pr.overlap_across_networks(paths, pairs=[("ZCCHC24", "ZEB1"), ("SNAI2", "TWIST1")])                 # exactly these pairs
+
+mo.summary()                  # per pair: in how many networks tested / a hit, median fold, jaccard, overlap, the networks with a hit
+mo.matrix("fold")             # networks x pairs (any column of mo.table; signs=("+", "+") chooses the tail combination)
+mo.table, mo.pairs, mo.sizes, mo.shared_targets       # all networks, with the column `network`
+mo.coverage, mo.skipped       # per network: path, pairs tested, missing regulators; networks that cover no pair
+mo.results["GBM"]             # the RegulonOverlap of one network (figures, enrich, split_activity)
+```
+
+- **Pairs.** `tfs` alone: all pairs; `focus` (one of `tfs`): that regulator against each of the others (n - 1 instead of n (n - 1) / 2
+  tests, and less permutation time); `pairs`: exactly these. A network without some of the regulators is analysed for the pairs it covers
+  (`coverage`), one that covers none is skipped with a warning.
+- **Names.** Prefer a dict `name -> path`: the key is the `network` column and the key of `mo.results`, and the result can be merged by it
+  (below). With a plain list the name is the file name without extension; if the files are all called `FullReg.rds`, the folders that tell them
+  apart (`"BRCA/ARACNe"`, `"GBM"`); `names=[...]` or a dict overrides. Items may also be regulon DataFrames (then names are needed) and
+  `reader=` reads other formats than `.rds`.
+- **Memory and speed.** Each network is read, analysed and released; only the small results (the requested regulators) stay. `n_jobs > 1`
+  analyses that many networks in parallel in separate processes (each reads its own file and holds one network; R is started in each).
+  The permutations and reading the `.rds` dominate the run time. `cache_dir=` stores the result per network (key: the file with size and
+  modification time, and all settings including the pairs, so other settings or pairs recompute the network).
+- **Multiple testing.** `q_hyper` / `q_perm` are per network (over its pairs); `q_hyper_all` / `q_perm_all` are Benjamini-Hochberg over **all** rows
+  of all networks and are what `summary()` and `hits()` use. A *hit* is `q_*_all < q` (default 0.05), `fold >= fold_min` (2) and
+  `overlap >= min_overlap` (3); `p="perm"` / `"hyper"` chooses the null (default: permutation if run). The networks are not independent
+  (related tumour types, overlapping samples): "hit in 12 of 20 networks" describes, it is not a test of consistency.
+- **Merging.** `mo_a.merge(mo_b)` (or `pr.MultiOverlap.concat([...])`) combines analyses of *different* networks by name, e.g. cohorts added
+  later or runs with other pairs. It needs equal `tail`, `mor_min`, `min_likelihood`, `n_perm` and `seed` and no repeated network name (errors
+  otherwise); `q_*_all` are recomputed over all rows of the combined table, because the correction depends on the number of tests. The result
+  equals a joint run (tested).
+- **Recurrent targets and export.**
+
+```python
+rec = mo.recurrent_targets(min_networks=5)               # pair, gene, n_networks, n_tested, frac, mean likelihoods, networks
+col = mo.collect(min_networks=5)                         # GeneListCollection: one list per pair; per_network=True adds each network's lists
+enr = mo.enrich("h", min_networks=5)                     # over-representation (bundled collection by name or your own dict)
+mo.export("results/ZCCHC24_pancancer.xlsx", min_networks=5, enrichment=enr)     # or .gmt / a folder of csv files
+
+ax = mo.plot_matrix("fold"); mo.add_hits(ax=ax)          # networks x pairs heatmap; hits marked afterwards
+```
+
+  The default universe for `enrich` is, per pair, the intersection of the target universes of the networks in which it was tested.
 
 ## Clustering samples by protein activity
 

@@ -10,6 +10,7 @@ panel                  draw                            add statistics
 regulator x regulator  :func:`plot_heatmap`            :func:`add_heatmap_values`
 shared targets (mor)   :func:`plot_scatter`            :func:`add_scatter_stats`
 intersections          :func:`plot_upset`              :func:`add_upset_counts`
+networks x pairs       :func:`plot_matrix`             :func:`add_hits` (of a :class:`MultiOverlap`)
 =====================  ==============================  ====================================================
 """
 
@@ -19,7 +20,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-__all__ = ["plot_heatmap", "add_heatmap_values", "plot_scatter", "add_scatter_stats", "plot_upset", "add_upset_counts"]
+__all__ = ["plot_heatmap", "add_heatmap_values", "plot_scatter", "add_scatter_stats", "plot_upset", "add_upset_counts",
+           "plot_matrix", "add_hits"]
 
 _CONCORDANT, _DISCORDANT, _ZERO = "#1f77b4", "#d62728", "#9e9e9e"
 _PALETTE = ["#1f77b4", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9", "#6a3d9a", "#8c564b"]
@@ -63,6 +65,50 @@ def add_heatmap_values(ov, ax=None, fmt: str = "{:.2f}", **text_kwargs):
                 props = dict(ha="center", va="center", fontsize=6, color="white" if vals[i, j] > mid else "black")
                 props.update(text_kwargs)
                 ax.text(j, i, fmt.format(vals[i, j]), **props)
+    return ax
+
+
+def plot_matrix(mo, value: str = "fold", signs: tuple | None = None, ax=None, cmap: str = "Blues", title: str | None = None):
+    """Networks (rows) x pairs (columns) heatmap of one column of ``mo.table`` (a :class:`MultiOverlap`) for one tail combination.
+
+    Pairs that were not tested in a network stay empty. Mark the hits with :func:`add_hits`.
+    """
+    mat = mo.matrix(value, signs)
+    signs = mo._default_signs(signs)
+    if ax is None:
+        _, ax = plt.subplots(figsize=(1.8 + 0.5 * mat.shape[1], 1.0 + 0.25 * mat.shape[0]))
+    im = ax.imshow(np.ma.masked_invalid(mat.to_numpy(dtype=float)), cmap=cmap, aspect="auto")
+    ax.set_xticks(range(mat.shape[1]), mat.columns, rotation=45, ha="right", fontsize=7)
+    ax.set_yticks(range(mat.shape[0]), mat.index, fontsize=7)
+    ax.set_title(f"{value}, tails {_signs_label(signs)}" if title is None else title, loc="left", fontsize=8)
+    cb = ax.figure.colorbar(im, ax=ax, fraction=0.05, pad=0.03)
+    cb.ax.tick_params(labelsize=6)
+    ax._pyrea_multi = (mat, signs)
+    return ax
+
+
+def add_hits(mo, ax=None, q: float = 0.05, fold_min: float = 2.0, min_overlap: int = 3, p: str = "auto", marker: str = "*",
+             **text_kwargs):
+    """After :func:`plot_matrix`: put ``marker`` into the cells that are hits (see :meth:`MultiOverlap.hits`)."""
+    ax = plt.gca() if ax is None else ax
+    info = getattr(ax, "_pyrea_multi", None)
+    if info is None:
+        raise ValueError("Draw the matrix first (plot_matrix) on this axes")
+    mat, signs = info
+    t = mo.table.assign(hit=mo.hits(q, fold_min, min_overlap, p))
+    t = t[(t["sign1"] == signs[0]) & (t["sign2"] == signs[1]) & t["hit"]]
+    col = {c: j for j, c in enumerate(mat.columns)}
+    row = {r: i for i, r in enumerate(mat.index)}
+    vals = mat.to_numpy(dtype=float)
+    finite = vals[np.isfinite(vals)]
+    mid = (finite.min() + finite.max()) / 2 if len(finite) else 0
+    for _, r in t.iterrows():
+        i, j = row.get(r["network"]), col.get(f"{r['tf1']} | {r['tf2']}")
+        if i is None or j is None:
+            continue
+        props = dict(ha="center", va="center", fontsize=8, color="white" if vals[i, j] > mid else "black")
+        props.update(text_kwargs)
+        ax.text(j, i, marker, **props)
     return ax
 
 
