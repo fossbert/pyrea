@@ -23,6 +23,9 @@ from .regulon_specificity import regulon_specificity, RegulonSpecificity, top_pa
 from .regulon_specificity_multi import specificity_across_networks, MultiSpecificity
 from .activity_specificity import activity_specificity, ActivitySpecificity, activity_partners
 from .covariates import score_genesets, available_covariates, load_covariates, add_covariates, remove_covariates, resolve_covariates
+from .area_numpy import compact_regulons, rank_transform, area_nes, metaviper
+from .lincs import (LincsLibrary, LincsNetworks, RankedEffects, TfResponse, tf_response, perturbation_targets, perturbed_by,
+                    perturbation_specificity, tf_in_compounds, compound_set_enrichment)
 from .estimate import read_estimate, import_estimate, ESTIMATE_COHORTS
 from .activity_specificity_multi import activity_specificity_across_cohorts, MultiActivity, tcga_sample_id
 from .genelists import GeneListCollection, gene_set_enrichment, available_genesets

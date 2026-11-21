@@ -333,3 +333,12 @@ def test_cohort_pipeline_with_the_real_viper(monkeypatch, rng, tmp_path):
     assert (ma.coverage["pleiotropy"].isin(["ok"]) | ma.coverage["pleiotropy"].str.startswith("failed")).all()
     assert ma.pairs.query("variant == 'full'")["rho"].notna().all()
     np.testing.assert_allclose(ma.table.query("cohort == 'c1'")["rho_mean"].to_numpy(), ma.table.query("cohort == 'c2'")["rho_mean"].to_numpy())
+
+
+def test_a_worker_tolerates_settings_of_an_older_caller(cohorts):
+    """Spawned workers import the current module while a long-running kernel may still hold an older caller: missing newer settings use defaults."""
+    from pyrea.activity_specificity_multi import _run_cohort
+    co, purity = cohorts
+    kw = dict(method="mad", minsize=20, direction="abs", top=5, min_samples=20, pleiotropy=False, pleiotropy_args=None)        # no score_minsize
+    name, out, info = _run_cohort("BRCA", co["BRCA"], [("A", "B")], kw, purity, pr.tcga_sample_id, None, None, None)
+    assert out is not None and info["n_sets"] == 1 and out.settings["covariates"] == ["purity"]

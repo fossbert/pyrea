@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping, Optional
 
 import pandas as pd
 
@@ -13,14 +13,15 @@ __all__ = ["viper_activity"]
 
 
 def viper_activity(expression: pd.DataFrame,
-                   regulon: pd.DataFrame,
+                   regulon: "pd.DataFrame | Mapping[str, pd.DataFrame]",
                    method: str = "mad",
                    minsize: int = 25,
                    eset_filter: bool = True,
                    pleiotropy: bool = False,
                    nes: bool = True,
                    cores: int = 1,
-                   pleiotropy_args: Optional[dict] = None) -> pd.DataFrame:
+                   pleiotropy_args: Optional[dict] = None,
+                   mvws: float = 1.0) -> pd.DataFrame:
     """VIPER protein activity (Alvarez et al., Nat Genet 2016) via ``viper::viper``.
 
     Parameters
@@ -28,9 +29,10 @@ def viper_activity(expression: pd.DataFrame,
     expression : pd.DataFrame
         Gene expression, genes x samples. Single-sample signatures are made
         by ``method``.
-    regulon : pd.DataFrame
+    regulon : pd.DataFrame or dict of DataFrames
         Long-format regulon, columns ``source, target, mor, likelihood``
-        (see :func:`pyrea.read_regulon_rds`, :func:`pyrea.sig_to_reg`).
+        (see :func:`pyrea.read_regulon_rds`, :func:`pyrea.sig_to_reg`). A **dict name -> regulon** (several networks) runs metaVIPER: the NES of
+        the networks are integrated per regulator as the mean weighted by ``|NES| ** mvws`` (see :func:`pyrea.metaviper`).
     method : {"none", "scale", "rank", "mad", "ttest"}
         Signature method of ``viper::viper``; "mad" centers on the sample
         median and scales by the MAD.
@@ -70,7 +72,13 @@ def viper_activity(expression: pd.DataFrame,
         extra["pleiotropyArgs"] = ro.ListVector({k: (ro.StrVector([v]) if isinstance(v, str) else ro.FloatVector([float(v)]))
                                                   for k, v in merged.items()})
     try:
-        res = viper.viper(frame_to_r_matrix(expression), regulon_to_r(regulon),
+        if isinstance(regulon, Mapping):
+            ro, *_ = require_rpy2()
+            regulon_r = ro.ListVector({str(k): regulon_to_r(v) for k, v in regulon.items()})
+            extra["mvws"] = ro.FloatVector([float(mvws)])
+        else:
+            regulon_r = regulon_to_r(regulon)
+        res = viper.viper(frame_to_r_matrix(expression), regulon_r,
                           method=method, minsize=minsize, eset_filter=eset_filter,
                           pleiotropy=pleiotropy, nes=nes, cores=cores, verbose=False, **extra)
     except Exception as exc:

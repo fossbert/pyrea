@@ -336,7 +336,7 @@ def _run_cohort(name, item, sets, kw, covariates, sample_id, cache_dir, expressi
             if any(v.isna().any().any() for v in variants.values()):
                 info["pleiotropy"] = "failed: regulators without activity"
                 variants = {}
-            cov = resolve_covariates(covariates, expr, method=kw["method"], min_genes=kw["score_minsize"])
+            cov = resolve_covariates(covariates, expr, method=kw["method"], min_genes=kw.get("score_minsize", 10))
             out = activity_specificity(act, ok, covariates=cov, variants=variants, direction=kw["direction"], top=kw["top"],
                                        min_samples=kw["min_samples"])
             info["n_sets"], info["n_samples"], info["n_dropped"] = len(ok), out.settings["n_samples"], out.settings["n_dropped"]
