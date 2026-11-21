@@ -23,6 +23,7 @@ from .regulon_specificity import regulon_specificity, RegulonSpecificity, top_pa
 from .regulon_specificity_multi import specificity_across_networks, MultiSpecificity
 from .activity_specificity import activity_specificity, ActivitySpecificity, activity_partners
 from .covariates import score_genesets, available_covariates, load_covariates, add_covariates, remove_covariates, resolve_covariates
+from .estimate import read_estimate, import_estimate, ESTIMATE_COHORTS
 from .activity_specificity_multi import activity_specificity_across_cohorts, MultiActivity, tcga_sample_id
 from .genelists import GeneListCollection, gene_set_enrichment, available_genesets
 from .regulon_activity import split_activity, ActivitySplit

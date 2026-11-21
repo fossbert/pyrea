@@ -167,3 +167,17 @@ def test_score_genesets_with_aREA(rng):
     null = pr.score_genesets(X, {"random": [f"g{i}" for i in range(200, 240)]}, min_genes=10)
     assert abs(np.corrcoef(null["random"], f)[0, 1]) < 0.4                                # a list without signal does not follow f
     pd.testing.assert_frame_equal(d[["up"]], pr.score_genesets(X, {"up": up}, min_genes=10), check_exact=False, atol=1e-8)
+
+
+@viper
+def test_score_genesets_method_none_scores_every_sample_on_its_own_ranks(rng):
+    """With method="none" aREA ranks the genes within each sample: a sample's score does not depend on the other samples."""
+    X, f = _expression(rng, n=60)
+    up = [f"g{i}" for i in range(40)]
+    full = pr.score_genesets(X, {"up": up}, method="none", min_genes=10)
+    few = pr.score_genesets(X.iloc[:, :20], {"up": up}, method="none", min_genes=10)
+    np.testing.assert_allclose(few["up"].to_numpy(), full["up"].iloc[:20].to_numpy(), atol=1e-8)
+    assert np.corrcoef(full["up"], f)[0, 1] > 0.9
+    rel = pr.score_genesets(X, {"up": up}, method="mad", min_genes=10)
+    rel_few = pr.score_genesets(X.iloc[:, :20], {"up": up}, method="mad", min_genes=10)
+    assert not np.allclose(rel_few["up"].to_numpy(), rel["up"].iloc[:20].to_numpy())           # "mad" is relative to the cohort

@@ -47,7 +47,7 @@ class PhenotypeComparison:
         threshold), ``auc`` / ``auc_low`` / ``auc_high`` / ``p`` against the reference, and ``in_sample`` (True where
         group == scale: the scale was fitted on these samples, so the value is optimistic).
         Phenocopy: if group B scores high on the scale defined by A (and A on B's scale), the two
-        alterations put the target into the same state. See the README for how to read it.
+        alterations put the target into the same state. See docs/phenocopy.md for how to read it.
     target, method, reference, groups, lr, alpha, n_boot :
         The settings of the comparison (target protein, RL definition, reference label, group names in
         the order given, likelihood-ratio threshold, interval level, bootstrap resamples). The figure
