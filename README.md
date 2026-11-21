@@ -41,6 +41,7 @@ BiocManager::install("viper")
 | `pyrea.comutation` | `comutation_effect` -- effect of a co-alteration with and without a driver (2 x 2 design); `CoMutationResult` with figures (`pyrea.comutation_plot`) |
 | `pyrea.regulon_overlap` | `regulon_overlap` -- overlap of the positive / negative target tails of several regulators, with hypergeometric and degree-weighted permutation null; `RegulonOverlap` with figures (`pyrea.regulon_overlap_plot`), gene list collection and export, enrichment, activity split (`pyrea.regulon_activity`); `pairs=` / `focus=` select the pairs |
 | `pyrea.regulon_overlap_multi` | `overlap_across_networks` -- the overlap in a list of networks (paths of `.rds` files, one in memory at a time); `MultiOverlap` with per-pair summary across networks, recurrent shared targets, enrichment, export and a networks x pairs figure |
+| `pyrea.regulon_specificity` | `regulon_specificity`, `top_partners` -- is a set of regulators (pair, triplet, ...) more closely linked than other regulators of the network? Size-matched random regulator sets and partner ranks; `pyrea.regulon_specificity_multi`: `specificity_across_networks`, `MultiSpecificity` (summary, matrix, merge, export, figure via `pyrea.regulon_specificity_plot`) |
 | `pyrea.genelists` | `GeneListCollection` (named gene lists with provenance, export to xlsx / csv / gmt), `gene_set_enrichment` (over-representation; bundled collections by name), `available_genesets` |
 | `pyrea.concordance` | `activity_vs_expression` -- is an effect seen in the activity but not (or oppositely) in the expression? |
 
@@ -706,6 +707,50 @@ ax = mo.plot_matrix("fold"); mo.add_hits(ax=ax)          # networks x pairs heat
 ```
 
   The default universe for `enrich` is, per pair, the intersection of the target universes of the networks in which it was tested.
+
+### Is a set of regulators more closely linked than other regulators? (`regulon_specificity`)
+
+`regulon_overlap` asks whether two regulators share more targets than random *genes* would. That does not show that they are special:
+regulators of related functions share hub targets, and large regulons overlap more by chance. `regulon_specificity` uses the other
+**regulators of the same network** as the reference, for pairs and for any larger set (no R needed):
+
+```python
+sp = pr.regulon_specificity(reg, [("ZCCHC24", "ZEB1"), ("ZCCHC24", "ZEB1", "ZEB2")], tail="positive", n_random=5000)
+sp.table       # per set and tail combination: sizes, overlap, expected, fold, null_median_fold, null_p95_fold, percentile, p_random, ext_rank_max, mutual_best
+sp.extension   # per set and member: rank of the member among ALL regulators as a partner of the others (+ the top candidates)
+pr.top_partners(reg, "ZCCHC24", top=20)          # the regulators that overlap most with ZCCHC24 (or with the common targets of several)
+```
+
+- **Size-matched random sets** (`p_random`): every member is replaced by a random regulator whose tail has about the same size
+  (`tol`, `min_pool`) and the fold = overlap / expected of the resulting sets is compared (`n_random` sets; smallest p `1 / (n_random + 1)`).
+  `percentile` is the share of random sets with a smaller fold. The null keeps the hub structure of the network, which the gene-level null of
+  `regulon_overlap` ignores (tested: an overlap that is "significant" against random genes is not unusual among regulators).
+- **Partner ranks** (`extension`): the other members form the base (their common targets), and all regulators with a tail of at least `min_size`
+  targets are ranked by the hypergeometric p of their overlap with it. For a pair this is the rank of B among the partners of A and of A among the
+  partners of B (`mutual_best`: both 1); for a triplet, how good C is as the third member given A and B. `ext_rank_max` /
+  `ext_percentile_max` (rank / candidates) is the weakest link of the set; `top` lists the best candidates with their overlap.
+- **Tails.** `tail="positive"` (default), `"negative"` or `"both"`: every combination of the members' tails (`+/+`, `-/-`, `+/-`, `-/+`; 8 for
+  a triplet), where anti-correlated regulators show up. Only regulators with a tail of at least `min_size` (25) are in the reference; with no
+  such regulator for a sign `p_random` is NaN.
+- **Reading the result.** Real networks are modular: most random regulator pairs share nothing, but regulators of one module overlap strongly. A
+  set can then be clearly above random regulators (small `p_random`) and still not be the tightest pair of its module (partner rank 10 of 1300);
+  the ranks show which of the two holds. `p_random` says "more than regulators of that size usually do", not "related by function".
+
+Across many networks the same analysis runs with `specificity_across_networks` (networks as paths or a dict `name -> path`, names, `n_jobs`,
+`cache_dir`, `reader`, merging by name as for `overlap_across_networks`):
+
+```python
+ms = pr.specificity_across_networks(net_paths, [("ZCCHC24", "ZEB1"), ("ZCCHC24", "ZEB1", "BNC2")], n_random=5000, n_jobs=4)
+ms.summary()                      # per set: networks evaluated / hits, median fold vs matched null, median percentile, n_mutual_best, n_top
+ms.matrix("percentile")           # networks x sets (also "fold", "p_random", "ext_percentile_max"; signs="+/-" for a tail combination)
+ms.extension                      # partner ranks and top candidates per network
+ax = ms.plot_matrix("percentile"); ms.add_hits(ax=ax)
+ms.merge(other); ms.export("results/specificity.xlsx")
+```
+
+A *hit* needs `q_random_all` < 0.05 (Benjamini-Hochberg of `p_random` over all rows of all networks), `fold >= 2` and `overlap >= 3`. Because of the
+floor `1 / (n_random + 1)` many rows at the floor are needed before the BH correction lets any pass; use a large `n_random`. `n_top` (networks in
+which every member is within the best `top_frac`, 5 %, of the partners of the others) has no such floor. The networks are not independent.
 
 ## Clustering samples by protein activity
 

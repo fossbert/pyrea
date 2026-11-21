@@ -16,6 +16,7 @@ import pickle
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
 
@@ -403,21 +404,8 @@ def overlap_across_networks(networks, tfs: Optional[Sequence[str]] = None, *, fo
     kw = dict(tail=tail, mor_min=float(mor_min), min_likelihood=float(min_likelihood),
               universe=None if universe is None else sorted(map(str, universe)), n_perm=int(n_perm), seed=int(seed))
 
-    if n_jobs is None or n_jobs <= 1 or len(items) == 1:
-        runs = []
-        for name, item in items:
-            runs.append(_run_network(name, item, requested, kw, cache_dir, reader))
-            if verbose:
-                _say(runs[-1])
-    else:
-        import multiprocessing as mp
-        with ProcessPoolExecutor(max_workers=n_jobs, mp_context=mp.get_context("spawn")) as ex:     # spawn: R / rpy2 must not be forked
-            futs = [ex.submit(_run_network, name, item, requested, kw, cache_dir, reader) for name, item in items]
-            runs = []
-            for fu in futs:
-                runs.append(fu.result())
-                if verbose:
-                    _say(runs[-1])
+    runs = _run_all(items, partial(_run_network, requested=requested, kw=kw, cache_dir=cache_dir, reader=reader),
+                    n_jobs, _say if verbose else None)
 
     results = {n: ov for n, ov, info in runs if ov is not None}
     skipped = {n: info["reason"] for n, ov, info in runs if ov is None}
@@ -441,6 +429,26 @@ def overlap_across_networks(networks, tfs: Optional[Sequence[str]] = None, *, fo
                 "seed": int(seed), "pairs": [f"{a}|{b}" for a, b in requested], "n_networks": len(items)}
     return MultiOverlap(results=results, skipped=skipped, coverage=coverage, table=table, pairs=cat("pairs"), sizes=sizes,
                         shared_targets=cat("shared_targets"), settings=settings)
+
+
+def _run_all(items, fn, n_jobs, say=None) -> list:
+    """``fn(name, item)`` for every network, sequentially or in ``n_jobs`` separate (spawned) processes; ``say(result)`` reports progress."""
+    if n_jobs is None or n_jobs <= 1 or len(items) == 1:
+        runs = []
+        for name, item in items:
+            runs.append(fn(name, item))
+            if say:
+                say(runs[-1])
+        return runs
+    import multiprocessing as mp
+    with ProcessPoolExecutor(max_workers=n_jobs, mp_context=mp.get_context("spawn")) as ex:     # spawn: R / rpy2 must not be forked
+        futs = [ex.submit(fn, name, item) for name, item in items]
+        runs = []
+        for fu in futs:
+            runs.append(fu.result())
+            if say:
+                say(runs[-1])
+    return runs
 
 
 def _say(run) -> None:
