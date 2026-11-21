@@ -375,3 +375,34 @@ def test_scan_cache_does_not_depend_on_files_of_other_kinds(world, tmp_path):
     n2 = pr.LincsNetworks(both, nets, minsize=25)
     pr.perturbed_by(both, "X", n2, kinds=["xpr"], min_cells=2, cache_dir=cache)
     assert len(list(cache.glob("scan-*.pkl"))) == 1                                              # the xpr scan was reused
+
+
+def test_lineage_map_completes_unknown_lineages(world):
+    _, _, _, _, tmp, (files, siginfo, geneinfo, cellinfo, comp) = world
+    ci = cellinfo.copy()
+    ci["cell_lineage"] = ["unknown", "breast", "unknown", "colon"]
+    lib = pr.LincsLibrary(siginfo, geneinfo, cellinfo=ci, **files)                   # default map names none of the test cells
+    assert set(lib.sig.loc[lib.sig["cell"] == "c1", "lineage"]) == {"unknown"}
+    lib = pr.LincsLibrary(siginfo, geneinfo, cellinfo=ci, lineage_map={"c1": "stomach", "c2": "ovary"}, **files)
+    lin = lib.sig.groupby("cell")["lineage"].first()
+    assert lin["c1"] == "stomach" and lin["c2"] == "ovary" and lin["c3"] == "unknown" and lin["c4"] == "colon"    # the map also overrides known ones
+    assert "HEK293T" in pr.DEFAULT_LINEAGE_MAP
+
+
+def test_effect_concordance_runs_and_compares_with_random_pairs(world):
+    lib, net, *_ = world
+    ran = 0
+    for kind in ("xpr", "oe", "cp"):
+        try:
+            r = pr.effect_concordance(lib, "T0", "T1", net, kind=kind, n_random=1, n_matched=1, min_cells=1)
+        except ValueError as e:                                                  # too few perturbations of that kind in the synthetic library
+            assert "perturbations" in str(e) or "signatures" in str(e)
+            continue
+        assert -1 <= r.rho <= 1 and r.n >= 10 and np.isfinite(r.activity_rho)
+        assert len(r.random) == 1 and not ({"T0", "T1"} & (set(r.random["a"]) | set(r.random["b"])))
+        assert 0 < r.p_random <= 1 and 0 < r.p_matched <= 1 and list(r.effects.columns) == ["T0", "T1"]
+        assert r.meta["kind"] == kind
+        ran += 1
+    assert ran >= 1
+    with pytest.raises(ValueError, match="No usable regulon"):
+        pr.effect_concordance(lib, "T0", "NOPE", net)

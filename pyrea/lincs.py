@@ -12,6 +12,7 @@ Questions this answers for a candidate (e.g. ZEB1 or ZCCHC24):
 - :func:`perturbation_targets`: which other regulators change when the gene is perturbed (top X)?
 - :func:`perturbed_by`: for a regulator whose gene has no perturbation: the perturbation of which genes changes its activity most?
 - :func:`tf_in_compounds`: which compounds raise or lower its activity, and which mechanisms of action are enriched?
+- :func:`effect_concordance`: do two regulators respond alike to the same perturbations, more than random regulator pairs of the network?
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from scipy.stats import fisher_exact, false_discovery_control, mannwhitneyu, nor
 from .area_numpy import compact_regulons, metaviper, rank_transform, _nes_of
 
 __all__ = ["LincsLibrary", "LincsNetworks", "RankedEffects", "TfResponse", "tf_response", "perturbation_targets", "perturbed_by",
-           "perturbation_specificity", "tf_in_compounds", "compound_set_enrichment"]
+           "perturbation_specificity", "tf_in_compounds", "compound_set_enrichment", "effect_concordance", "EffectConcordance", "DEFAULT_LINEAGE_MAP"]
 
 _KINDS = {"trt_oe": "oe", "trt_xpr": "xpr", "trt_cp": "cp", "oe": "oe", "xpr": "xpr", "cp": "cp"}
 _REQUIRED = ("sig_id", "cell_iname")
@@ -63,6 +64,15 @@ def _bh(p: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------- the library of signatures
+# Tissue of cell lines whose ``cell_lineage`` is "unknown" in cellinfo_beta.txt and that are not in CCLE/DepMap (checked against DepMap ``Model.csv``: only
+# HAP1 is). Immortalised, normal or well-known lines; patient-derived pools (XC.*, MCLF*), iPS and stem cells stay unknown. Names are those of the LINCS lineages.
+DEFAULT_LINEAGE_MAP = {
+    "HEK293T": "kidney", "HPTEC": "kidney", "AALE": "lung", "1HAE": "lung", "HUH751": "liver", "LHSAR": "prostate", "C42": "prostate",
+    "HME": "breast", "HMELZ": "breast", "HAP1": "haematopoietic_and_lymphoid_tissue", "CD34": "haematopoietic_and_lymphoid_tissue",
+}
+_UNKNOWN_LINEAGE = {"", "unknown", "nan", "none"}
+
+
 class LincsLibrary:
     """Signatures of the LINCS L1000 level 5 files, read from disk on demand.
 
@@ -82,6 +92,10 @@ class LincsLibrary:
         ``cellinfo_beta.txt``: ``cell_iname``, ``cell_lineage``, ``primary_disease`` (for lineage selections and ``network_map``).
     compoundinfo : path or DataFrame, optional
         ``compoundinfo_beta.txt``: ``pert_id``, ``cmap_name``, ``target``, ``moa`` (annotation of compound results).
+    lineage_map : mapping cell line -> lineage, optional
+        Lineage for cell lines whose ``cell_lineage`` is unknown in ``cellinfo`` (81 of 245 in the beta file, mostly patient-derived pools, normal and
+        stem cells that are not in CCLE). ``None``: :data:`DEFAULT_LINEAGE_MAP` (HEK293T, AALE, HUH751, LHSAR, ...); a mapping replaces the default for the
+        lines it names (it also overrides known lineages); ``{}`` switches the completion off.
 
     Attributes
     ----------
@@ -92,7 +106,7 @@ class LincsLibrary:
         Gene symbols of the rows of the matrices (duplicated symbols are dropped, the first is kept).
     """
 
-    def __init__(self, siginfo, geneinfo, oe=None, xpr=None, cp=None, cellinfo=None, compoundinfo=None):
+    def __init__(self, siginfo, geneinfo, oe=None, xpr=None, cp=None, cellinfo=None, compoundinfo=None, lineage_map=None):
         self.files = {k: Path(v) for k, v in (("oe", oe), ("xpr", xpr), ("cp", cp)) if v is not None}
         if not self.files:
             raise ValueError("Give at least one of oe, xpr, cp (a .gctx file)")
@@ -157,6 +171,12 @@ class LincsLibrary:
             self.cellinfo = ci
             if "cell_lineage" in ci:
                 sig["lineage"] = sig["cell"].map(ci["cell_lineage"]).fillna("").astype(str)
+            fill = pd.Series(DEFAULT_LINEAGE_MAP if lineage_map is None else {}, dtype=object)
+            known = sig["lineage"].str.lower().isin(_UNKNOWN_LINEAGE)
+            sig.loc[known, "lineage"] = sig.loc[known, "cell"].map(fill).fillna(sig.loc[known, "lineage"])
+            if lineage_map:
+                over = sig["cell"].map(pd.Series(dict(lineage_map), dtype=object))
+                sig["lineage"] = over.fillna(sig["lineage"])
             if "primary_disease" in ci:
                 sig["disease"] = sig["cell"].map(ci["primary_disease"]).fillna("").astype(str)
         self.compoundinfo = None
@@ -712,3 +732,86 @@ def compound_set_enrichment(effects: RankedEffects, top: int = 100, direction: s
         return out.assign(q=[])
     out["q"] = _bh(out["p"].to_numpy())
     return out.sort_values("p", ignore_index=True)
+
+
+@dataclass
+class EffectConcordance:
+    """Result of :func:`effect_concordance`: ``rho`` (Spearman of the effects of the pair over the perturbations), ``n`` perturbations, ``activity_rho``
+    (correlation of the two activities over the signatures), ``random`` (DataFrame ``rho`` / ``activity_rho`` of the random pairs), ``p_random`` (share of
+    random pairs with rho >= observed, +1 corrected), ``p_matched`` (the same among the random pairs whose activity correlation is closest to the
+    observed one), ``percentile`` of the pair among the random pairs, ``effects`` (z per perturbation for both regulators)."""
+
+    rho: float
+    n: int
+    activity_rho: float
+    random: pd.DataFrame
+    p_random: float
+    p_matched: float
+    percentile: float
+    effects: pd.DataFrame
+    meta: dict = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return (f"EffectConcordance({self.meta.get('a')}|{self.meta.get('b')}: rho={self.rho:.2f} over {self.n}; activity rho={self.activity_rho:.2f}; "
+                f"p_random={self.p_random:.3g}, p_matched={self.p_matched:.3g})")
+
+
+def effect_concordance(lib: LincsLibrary, tf_a: str, tf_b: str, networks: LincsNetworks, kind: str = "xpr", cells: "str | Sequence[str] | None" = None,
+                       lineage: "str | Sequence[str] | None" = None, times: Optional[Sequence[float]] = None, use: Optional[Sequence[str]] = None,
+                       network_map: Optional[Mapping[str, Sequence[str]]] = None, mvws: float = 1.0, min_cells: int = 1, n_random: int = 200,
+                       n_matched: int = 50, seed: int = 0, size: int = 4000, qc_pass: bool = True) -> EffectConcordance:
+    """Do two regulators respond alike to the same perturbations, more than random pairs of regulators of the same networks?
+
+    ``kind``: ``"xpr"`` / ``"oe"`` (effects per perturbed gene) or ``"cp"`` (per compound). The activity of both regulators and of ``2 * n_random`` random
+    other regulators is determined in the signatures of the selection (``cells``, ``lineage``, ``times``), standardised within cell line (and time), summarised
+    per perturbation like :func:`perturbed_by`; the Spearman correlation of the effects of the pair over the perturbations (the own gene of both regulators
+    left out) is compared with that of ``n_random`` random regulator pairs.
+
+    Regulators of the same network are correlated anyway (shared targets, shared baseline), so ``p_random`` alone overstates specificity: ``p_matched``
+    compares only with the ``n_matched`` random pairs whose activity correlation over the signatures is closest to that of the pair.
+    """
+    kind = _KINDS[kind]
+    s = lib.signatures(kind, cell=cells, lineage=lineage, times=times, qc_pass=qc_pass)
+    if s.empty:
+        raise ValueError("No signatures for this selection")
+    allregs = [r for n in (networks.names if use is None else use) for r in networks.regs[n]]
+    allregs = list(dict.fromkeys(allregs))
+    pair = [str(tf_a), str(tf_b)]
+    lost = [t for t in pair if t not in allregs]
+    if lost:
+        raise ValueError(f"No usable regulon for {lost} in the networks")
+    pool = [r for r in allregs if r not in pair]
+    if len(pool) < 2:
+        raise ValueError("Too few other regulators for random pairs")
+    rng = np.random.default_rng(seed)
+    n_random = int(min(n_random, len(pool) // 2))
+    draw = rng.choice(pool, size=2 * n_random, replace=False)
+    regs = pair + list(draw)
+    act = lib.activity(list(s.index), networks, regulators=regs, use=use, network_map=network_map, mvws=mvws, size=size)
+    ids = list(s.index)
+    gcol = "pert_id" if kind == "cp" and "pert_id" in s else "pert"
+    d = pd.DataFrame({"gene": s[gcol].astype(str).to_numpy(), "cell": s["cell"].to_numpy(),
+                      "grp": (s["cell"].astype(str) + "|" + s["time"].astype(str)).to_numpy() if kind == "cp" else s["cell"].to_numpy()}, index=ids)
+    z = act.T.reindex(ids)
+    z = (z - z.groupby(d["grp"]).transform("mean")) / z.groupby(d["grp"]).transform("std").replace(0, np.nan)
+    per_cell = z.groupby([d["gene"].to_numpy(), d["cell"].to_numpy()]).median()
+    cnt = per_cell.groupby(level=0).count()
+    eff = per_cell.groupby(level=0).sum() / np.sqrt(cnt)
+    ncell = pd.Series(1, index=per_cell.index).groupby(level=0).sum()
+    eff = eff[ncell.reindex(eff.index).to_numpy() >= min_cells]
+    eff = eff[~eff.index.str.upper().isin([t.upper() for t in pair])]
+    if len(eff) < 10:
+        raise ValueError(f"Only {len(eff)} perturbations with {min_cells} cell lines")
+    rk = eff.rank()
+    r_eff = rk.corr(method="pearson")                                  # Spearman over the perturbations (missing values: pairwise)
+    a_rk = act.T.rank().corr(method="pearson")
+    rho, act_rho = float(r_eff.loc[pair[0], pair[1]]), float(a_rk.loc[pair[0], pair[1]])
+    first, second = list(draw[:n_random]), list(draw[n_random:])
+    rnd = pd.DataFrame({"a": first, "b": second,
+                        "rho": [r_eff.loc[a, b] for a, b in zip(first, second)], "activity_rho": [a_rk.loc[a, b] for a, b in zip(first, second)]})
+    p_random = (1 + float((rnd["rho"] >= rho).sum())) / (1 + len(rnd))
+    near = rnd.iloc[(rnd["activity_rho"] - act_rho).abs().argsort()[:min(n_matched, len(rnd))]]
+    p_matched = (1 + float((near["rho"] >= rho).sum())) / (1 + len(near))
+    percentile = float((rnd["rho"] < rho).mean())
+    return EffectConcordance(rho, len(eff), act_rho, rnd, p_random, p_matched, percentile, eff[pair],
+                             {"a": pair[0], "b": pair[1], "kind": kind, "n_random": len(rnd), "n_matched": len(near)})

@@ -54,6 +54,8 @@ act = lib.activity(sig_ids, net, regulators=["ZEB1", "ZCCHC24"])                
 - **Tumour-line-specific analyses.** `use=["BRCA", "STAD"]` restricts the networks, and `network_map={"breast": ["BRCA"], "MCF7": ["BRCA"], "colon": ["COAD"]}` integrates
   only the networks of the cell line (looked up first) or of its lineage (`cellinfo` `cell_lineage`) for each signature; cell lines that are not in the map use all networks.
   The cell lines of a tumour type are selected with `cells=` / `lineage=`.
+  81 of the 245 cell lines have an unknown lineage in `cellinfo_beta.txt` (patient-derived pools, normal and stem cells, hardly any of them in CCLE/DepMap). `LincsLibrary(..., lineage_map=)` completes
+  them: by default `pr.DEFAULT_LINEAGE_MAP` (HEK293T, HPTEC, AALE, 1HAE, HUH751, LHSAR, C42, HME, HMELZ, HAP1, CD34); a mapping of your own overrides it, `{}` switches it off.
 - The NES of **one regulator** is comparable between signatures; NES of different regulators are only roughly comparable (the size of the regulon enters). The analyses
   therefore standardise every regulator against its own background (below).
 
@@ -146,3 +148,16 @@ LINCS genes cover 69 to 440 targets of ZEB1 and 73 to 466 of ZCCHC24 per network
 - **Compounds (`tf_in_compounds`, ZEB1, MCF7 / A549 / HT29 at 24 h: 75 000 signatures, 8 600 compounds, 3 minutes).** No single compound passes the correction (three cell lines), but the
   mechanisms of action are informative: among the compounds that raise ZEB1 activity **MTOR inhibitors** (5 of 15, `q` 0.0005), **PI3K inhibitors** (3 of 16, 0.05) and IGF-1 inhibitors (2 of 6,
   0.05) are enriched.
+
+
+## Do two regulators respond alike? `effect_concordance`
+
+```python
+r = pr.effect_concordance(lib, "ZCCHC24", "ZEB1", net_stad, kind="xpr", cells=["AGS"], n_random=200)
+r                      # rho over the perturbations, activity rho, p_random, p_matched
+r.random               # the random regulator pairs (rho, activity_rho)
+```
+
+Spearman correlation of the effects of both regulators over all perturbed genes (`kind="xpr"`/`"oe"`) or compounds (`"cp"`, with `lineage=` / `times=`), compared with `n_random` random pairs of other
+regulators of the same networks. Regulators of one network respond alike for trivial reasons (shared targets, shared baseline activity), so `p_random` is lenient; `p_matched` compares only with the random pairs
+whose activity correlation over the signatures is closest to that of the pair (`n_matched`). A concordance that beats these pairs is evidence for shared upstream control.
