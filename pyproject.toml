@@ -40,7 +40,7 @@ Issues = "https://github.com/fossbert/pyrea/issues"
 include = ["pyrea*"]
 
 [tool.setuptools.package-data]
-pyrea = ["data/*.json"]
+pyrea = ["data/*.json", "data/covariates/*.json", "data/covariates/*.csv.gz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,13 @@
+{
+ "tables": {
+  "absolute": {
+   "file": "absolute.csv.gz",
+   "source": "TCGA PanCanAtlas ABSOLUTE mastercalls (TCGA_mastercalls.abs_tables_JSedit.fixed.txt; Taylor et al., Cancer Cell 2018; method: Carter et al., Nat Biotechnol 2012). Sample key: TCGA-XX-XXXX-01. Rows of all call statuses are kept (absolute_called = 1 for status 'called').",
+   "columns": {
+    "absolute_purity": "tumour purity estimated by ABSOLUTE (0-1)",
+    "absolute_ploidy": "tumour ploidy estimated by ABSOLUTE",
+    "absolute_called": "1 if the ABSOLUTE call status is 'called' (0: legacy / maf / snp calls)"
+   }
+  }
+ }
+}

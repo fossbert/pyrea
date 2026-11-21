@@ -21,6 +21,9 @@ from .regulon_overlap import regulon_overlap, RegulonOverlap
 from .regulon_overlap_multi import overlap_across_networks, MultiOverlap
 from .regulon_specificity import regulon_specificity, RegulonSpecificity, top_partners
 from .regulon_specificity_multi import specificity_across_networks, MultiSpecificity
+from .activity_specificity import activity_specificity, ActivitySpecificity, activity_partners
+from .covariates import score_genesets, available_covariates, load_covariates, add_covariates, remove_covariates, resolve_covariates
+from .activity_specificity_multi import activity_specificity_across_cohorts, MultiActivity, tcga_sample_id
 from .genelists import GeneListCollection, gene_set_enrichment, available_genesets
 from .regulon_activity import split_activity, ActivitySplit
 from .concordance import activity_vs_expression, CONCORDANCE_CATEGORIES, CONCORDANCE_COLORS

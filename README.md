@@ -33,7 +33,7 @@ BiocManager::install("viper")
 | `pyrea.utils` | `gene_sets_to_regulon`, `sig_to_reg`, `load_genesets`, `load_species_converter` |
 | `pyrea.plotting` | internal plotting helpers used by the classes above |
 | `pyrea.mps` | Mutant phenotype score (Alvarez et al. 2016): `relative_likelihood`, `mutant_phenotype_score`, `classify_phenotype`, `mutation_association`, `locus_specific_mps`. Only the association tests need R |
-| `pyrea.rbackend.viper` | `viper_activity` -- `viper::viper` (mad/rank/... signatures) for protein activity, as DataFrame (needs R) |
+| `pyrea.rbackend.viper` | `viper_activity` -- `viper::viper` (mad/rank/... signatures) for protein activity, as DataFrame; `pleiotropy=True` with `pleiotropy_args` (needs R) |
 | `pyrea.rbackend.regulon` | `read_regulon_rds` -- ARACNe/viper regulon from `.rds` to long format (needs R) |
 | `pyrea.rpt` | `viper_rpt` -- residual post-translational activity (`rank`, `lineal`, `spline`), pure Python, matches `viper::viperRPT` |
 | `pyrea.mps_plot` | `plot_mps_rank`, `plot_mps_traits`, `plot_rl_diagnostic` |
@@ -42,6 +42,8 @@ BiocManager::install("viper")
 | `pyrea.regulon_overlap` | `regulon_overlap` -- overlap of the positive / negative target tails of several regulators, with hypergeometric and degree-weighted permutation null; `RegulonOverlap` with figures (`pyrea.regulon_overlap_plot`), gene list collection and export, enrichment, activity split (`pyrea.regulon_activity`); `pairs=` / `focus=` select the pairs |
 | `pyrea.regulon_overlap_multi` | `overlap_across_networks` -- the overlap in a list of networks (paths of `.rds` files, one in memory at a time); `MultiOverlap` with per-pair summary across networks, recurrent shared targets, enrichment, export and a networks x pairs figure |
 | `pyrea.regulon_specificity` | `regulon_specificity`, `top_partners` -- is a set of regulators (pair, triplet, ...) more closely linked than other regulators of the network? Size-matched random regulator sets and partner ranks; `pyrea.regulon_specificity_multi`: `specificity_across_networks`, `MultiSpecificity` (summary, matrix, merge, export, figure via `pyrea.regulon_specificity_plot`) |
+| `pyrea.activity_specificity` | `activity_specificity`, `activity_partners` -- the activity counterpart (Spearman and partial correlations, partner ranks among all regulators, activity variants); `pyrea.activity_specificity_multi`: `activity_specificity_across_cohorts` (needs R), `MultiActivity` (summary, random-effects meta-analysis, pleiotropy effect, merge, export; figures in `pyrea.activity_specificity_plot`), `tcga_sample_id` |
+| `pyrea.covariates` | `score_genesets` (gene lists scored per sample with aREA, needs R), registry of background variables (`available_covariates`, `load_covariates`, `add_covariates`, `remove_covariates`; bundled: ABSOLUTE purity / ploidy), `resolve_covariates` |
 | `pyrea.genelists` | `GeneListCollection` (named gene lists with provenance, export to xlsx / csv / gmt), `gene_set_enrichment` (over-representation; bundled collections by name), `available_genesets` |
 | `pyrea.concordance` | `activity_vs_expression` -- is an effect seen in the activity but not (or oppositely) in the expression? |
 
@@ -751,6 +753,94 @@ ms.merge(other); ms.export("results/specificity.xlsx")
 A *hit* needs `q_random_all` < 0.05 (Benjamini-Hochberg of `p_random` over all rows of all networks), `fold >= 2` and `overlap >= 3`. Because of the
 floor `1 / (n_random + 1)` many rows at the floor are needed before the BH correction lets any pass; use a large `n_random`. `n_top` (networks in
 which every member is within the best `top_frac`, 5 %, of the partners of the others) has no such floor. The networks are not independent.
+
+### Are the activities of a set of regulators more closely linked than those of other regulators? (`activity_specificity`)
+
+The activity counterpart of `regulon_specificity`: instead of the overlap of the targets, the Spearman correlation of the VIPER activities
+across the samples of a cohort, again with the **other regulators of the network** as reference (pure numpy; the activity matrix comes from
+`viper_activity(..., eset_filter=False)` over the **whole network**, so that the ranks of the signature do not depend on the few
+regulons given):
+
+```python
+act = pr.viper_activity(expression, reg, method="mad", minsize=25, eset_filter=False)
+sp = pr.activity_specificity(act, [("ZCCHC24", "ZEB1"), ("ZCCHC24", "ZEB1", "BNC2")], covariates=purity)
+sp.pairs        # every pair x activity variant: rho, p and (with covariates) partial_rho, partial_p
+sp.table        # per set: rho_mean, abs_rho_min, partial versions, ext_rank_max / ext_percentile_max / mutual_best (raw and padj_*)
+sp.extension    # per set, member and adjusted: rank among ALL regulators as a partner of the other members, percentile, top candidates
+pr.activity_partners(act, "ZCCHC24", covariates=purity, top=20)      # whose activity is most closely linked to ZCCHC24's?
+```
+
+- **Partner ranks.** The other members form the base; every regulator of the network is regressed on the base activities and ranked by R²
+  (for a pair: by the squared correlation; `direction="positive"` / `"negative"` ranks by the signed correlation, which is what an anti-correlated
+  pair needs when only the negative direction is of interest). `ext_percentile_max` (rank / candidates of the weakest member; small = good) and
+  `mutual_best` are as in `regulon_specificity`.
+- **Covariates** (e.g. tumour purity): the ranks of the activities are regressed on the ranks of the covariates; the partial Spearman correlation
+  is the correlation of the residuals (p-value with `n - 2 - q` degrees of freedom), and the adjusted ranks are those of the residuals. Samples without
+  a covariate are dropped from **all** statistics (`settings["n_dropped"]`). The adjustment is linear in the ranks: it removes a monotone purity effect,
+  not every confounder.
+- **Activity variants.** `variants={"pleiotropy": ...}` adds pair correlations from further activity matrices, e.g. VIPER activity from a regulon
+  **restricted to the candidates** with the pleiotropy ("shadow") correction (`viper_activity(..., pleiotropy=True, pleiotropy_args=dict(regulators=...,
+  shadow=..., targets=..., penalty=..., method="adaptive"|"absolute"))`), which down-weights targets shared with a more significant regulator. How much
+  of the correlation lives in the shared targets is the difference to the full activity. Note that VIPER's R code fails when, in a sample, only a
+  single pair of significant regulons shares enough targets (an error message says so); with a handful of overlapping candidates it runs.
+
+Across cohorts (one expression matrix and network each; needs R):
+
+```python
+cohorts = {"BRCA": (net_paths["BRCA"], "TCGA-BRCA-logCPM.tsv"), "STAD": (net_paths["STAD"], "TCGA-STAD-logCPM.tsv")}   # name -> (network, expression)
+ma = pr.activity_specificity_across_cohorts(cohorts, [("ZCCHC24", "ZEB1")], covariates="absolute_purity", sample_id=pr.tcga_sample_id,
+                                            pleiotropy=True, n_jobs=4, cache_dir="results/activity_cache")      # covariates=None: no adjustment (default)
+ma.coverage; ma.summary()          # per set: cohorts, median rho, median partner percentile, n_top (every member within the best 5 %), n_mutual_best
+ma.meta(adjusted=True)             # random-effects meta-analysis of every pair (Fisher z, Spearman variance 1.06): pooled rho, CI, I2
+ma.pair_matrix("partial_rho"); ma.pleiotropy_effect()
+ax = ma.plot_matrix(); ma.add_top(ax=ax); ma.plot_forest("ZCCHC24", "ZEB1", adjusted=True)
+ma.merge(other); ma.export("results/activity.xlsx")
+```
+
+- **Covariates are optional** (`covariates=None`, no adjustment, is the default) and can be given as a registry name, a dict of gene lists that is
+  scored per cohort, a table, or a list of these (see *Gene list scores and background variables* below).
+- Networks and expression are read per cohort (paths or DataFrames; `expression_reader=` / `regulon_reader=` for other formats), the activity
+  of the whole network is inferred in each, and covariates are matched by sample name; `sample_id` maps the expression's column names to the
+  covariate index (`pr.tcga_sample_id`: `"TCGA.2H.A9GF.01A.11R.A37I.31"` -> `"TCGA-2H-A9GF-01"`; with `n_jobs > 1` the function must be picklable, i.e.
+  defined in a module). Names that repeat after the mapping keep the first sample (`coverage["n_duplicated_samples"]`).
+- If VIPER's pleiotropy correction fails in a cohort the other results stay and `coverage["pleiotropy"]` says `failed: ...`.
+- The pooled correlation averages different tumour types: look at `I2` / `p_heterogeneity` (and the forest plot) before quoting one number.
+  `n_jobs` cohorts run in parallel in separate processes, each with its own R. Caching and merging by name work as for `overlap_across_networks`.
+- **Example (23 TCGA cohorts, TF networks, ABSOLUTE purity; ZCCHC24 | ZEB1).** Pooled Spearman rho 0.75 (95 % CI 0.64-0.83, `I2` 0.99), 0.73 after
+  adjusting for the purity; the correlation ranges from -0.5 (LAML) to 0.96 (ESCA). The weakest member is within the best 5 % of the partners of the
+  other in 13 of 23 cohorts, never the single best. The pleiotropy correction lowers rho by 0.03-0.12 (e.g. STAD 0.94 -> 0.85).
+
+#### Gene list scores and background variables (`score_genesets`, `load_covariates`)
+
+Any gene list (PAM50, EMT, hypoxia, a bundled Hallmark / Reactome collection, ...) can be scored per sample with aREA, the machinery of the protein
+activity (a gene list is a regulon with all modes of regulation 1; needs R). The scores can adjust the activity analysis or be used on their own:
+
+```python
+scores = pr.score_genesets(expression, {"EMT": emt_genes, "Hypoxia": hypoxia_genes})       # samples x lists (NES)
+hallmarks = pr.score_genesets(expression, "h")                                             # a bundled collection by name; also one bare gene list -> "score"
+```
+
+`method="mad"` (default) takes every gene relative to the median and MAD across the samples of the cohort, so scores say *higher or lower than in
+the rest of this cohort* and are not comparable between cohorts; the signature is ranked over all genes of the expression. A list is not a subtype
+classifier (PAM50 genes give a signature score, not the PAM50 call). `df.attrs["n_genes"]` holds the genes found per list; lists with fewer than
+`min_genes` found are left out with a warning.
+
+**Background variables** (covariates of samples) are kept in a small registry, like the gene sets. The tables bundled with the package are in
+`pyrea/data/covariates` (now: the TCGA **ABSOLUTE** purity and ploidy of the PanCanAtlas, about 65 KB); tables you add go to
+`$PYREA_DATA/covariates` (default `~/.pyrea/covariates`) and are used alike:
+
+```python
+pr.available_covariates()                                   # variable, description, table, source, location (bundled / user), n_samples
+pr.load_covariates("absolute_purity", samples=expr.columns, sample_id=pr.tcga_sample_id)    # rows for your samples (NaN where missing)
+pr.add_covariates("estimate", table, description={"estimate_stromal": "..."}, source="Yoshihara 2013, TCGA scores")   # samples x numeric variables
+pr.remove_covariates("estimate")                            # tables of your own only
+```
+
+Samples are matched by name; for TCGA the registry key is `TCGA-XX-XXXX-01` (`pr.tcga_sample_id` maps `TCGA.2H.A9GF.01A.11R...` to it). Variable
+names must be unique across the registry (use a prefix). The ABSOLUTE table keeps rows of every call status (`absolute_called` = 1 for `called`).
+`pr.resolve_covariates(spec, expression)` turns all forms of `covariates` (registry names, `{"name": genes}` dicts to score, tables, lists of these)
+into one table; `activity_specificity_across_cohorts` calls it for every cohort. **Caution:** gene list scores come from the same expression as the
+activities, so a list that contains the regulators or their targets (an EMT list for ZEB1) removes part of what is tested; compare with and without.
 
 ## Clustering samples by protein activity
 
